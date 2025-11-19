@@ -124,7 +124,7 @@ body {
     }
 
     .nifti-controls {
-      display: grid !important;
+      display: none !important;
     }
 
     .nifti-controls label {

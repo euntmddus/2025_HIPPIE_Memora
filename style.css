@@ -108,7 +108,7 @@ body {
 }
 
 .three-panel { 
-  display: none;
+  display: grid;
 
   .viewer {
       background: #000;
@@ -124,7 +124,7 @@ body {
     }
 
     .nifti-controls {
-      display: none !important;
+      display: grid !important;
     }
 
     .nifti-controls label {

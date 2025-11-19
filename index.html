@@ -1,11 +1,13 @@
 <!doctype html>
 <html lang="ko">
+
 <head>
   <meta charset="utf-8" />
   <title>Hipple MRI</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="css/style.css" />
 </head>
+
 <body>
   <div class="app">
 
@@ -13,12 +15,7 @@
       <button class="tool-btn" id="btnSave">저장</button>
       <div class="tool-sep"></div>
       <button class="tool-btn" id="btnUpload">MRI 업로드</button>
-      <input
-        type="file"
-        id="fileInput"
-        accept=".nii,.nii.gz,.zip"
-        hidden
-      />
+      <input type="file" id="fileInput" accept=".nii,.nii.gz,.zip" hidden />
 
       <div style="margin-left:auto" class="muted mono">발행: <span id="issuedAt">—</span></div>
     </div>
@@ -43,38 +40,38 @@
             No Image
             <div id="mprContainer" style="display:none;">
               <div class="three-panel">
-                  <!-- Axial -->
-                  <div id="axialPanel" class="three-subpanel">
-                    <canvas id="axialCanvas"></canvas>
-                    <div class="view-label">Axial</div>
-                    <span class="dir-label dir-top">A</span>
-                    <span class="dir-label dir-bottom">P</span>
-                    <span class="dir-label dir-left">R</span>
-                    <span class="dir-label dir-right">L</span>
-                    <div class="slice-info" id="axialInfo"></div>
-                  </div>
+                <!-- Axial -->
+                <div id="axialPanel" class="three-subpanel">
+                  <canvas id="axialCanvas"></canvas>
+                  <div class="view-label">Axial</div>
+                  <span class="dir-label dir-top">A</span>
+                  <span class="dir-label dir-bottom">P</span>
+                  <span class="dir-label dir-left">R</span>
+                  <span class="dir-label dir-right">L</span>
+                  <div class="slice-info" id="axialInfo"></div>
+                </div>
 
-                  <!-- Sagittal -->
-                  <div id="sagittalPanel" class="three-subpanel">
-                    <canvas id="sagittalCanvas"></canvas>
-                    <div class="view-label">Sagittal</div>
-                    <span class="dir-label dir-top">S</span>
-                    <span class="dir-label dir-bottom">I</span>
-                    <span class="dir-label dir-left">A</span>
-                    <span class="dir-label dir-right">P</span>
-                    <div class="slice-info" id="sagittalInfo"></div>
-                  </div>
+                <!-- Sagittal -->
+                <div id="sagittalPanel" class="three-subpanel">
+                  <canvas id="sagittalCanvas"></canvas>
+                  <div class="view-label">Sagittal</div>
+                  <span class="dir-label dir-top">S</span>
+                  <span class="dir-label dir-bottom">I</span>
+                  <span class="dir-label dir-left">A</span>
+                  <span class="dir-label dir-right">P</span>
+                  <div class="slice-info" id="sagittalInfo"></div>
+                </div>
 
-                  <!-- Coronal -->
-                  <div id="coronalPanel" class="three-subpanel">
-                    <canvas id="coronalCanvas"></canvas>
-                    <div class="view-label">Coronal</div>
-                    <span class="dir-label dir-top">S</span>
-                    <span class="dir-label dir-bottom">I</span>
-                    <span class="dir-label dir-left">R</span>
-                    <span class="dir-label dir-right">L</span>
-                    <div class="slice-info" id="coronalInfo"></div>
-                  </div>
+                <!-- Coronal -->
+                <div id="coronalPanel" class="three-subpanel">
+                  <canvas id="coronalCanvas"></canvas>
+                  <div class="view-label">Coronal</div>
+                  <span class="dir-label dir-top">S</span>
+                  <span class="dir-label dir-bottom">I</span>
+                  <span class="dir-label dir-left">R</span>
+                  <span class="dir-label dir-right">L</span>
+                  <div class="slice-info" id="coronalInfo"></div>
+                </div>
               </div>
             </div>
           </div>
@@ -86,7 +83,9 @@
         <div class="panel-body">
           <div class="kv"><b>환자명</b><span id="ptName">—</span></div>
           <div class="kv"><b>성별/나이</b><span id="ptSexAge">—</span></div>
-          <div class="kv"><b>신체 정보</b><ul id="ptVitals" class="vitals-list"></ul></div>
+          <div class="kv"><b>신체 정보</b>
+            <ul id="ptVitals" class="vitals-list"></ul>
+          </div>
 
           <div class="section-title">검사 결과 요약</div>
           <textarea id="summaryBox" class="textarea"></textarea>
@@ -105,4 +104,5 @@
 
   <script src="js/script.js"></script>
 </body>
+
 </html>

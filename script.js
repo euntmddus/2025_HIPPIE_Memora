@@ -25,6 +25,10 @@ const btnView2D = document.getElementById('btnView2D');
 const btnView3D = document.getElementById('btnView3D');
 const btnUpload = document.getElementById('btnUpload');
 
+const defaultImageTextEl = document.getElementById('defaultImageText');
+const viewerImgEl = document.getElementById('viewerImg');
+const mprContainerEl = document.getElementById('mprContainer');
+
 // 유틸
 function todayISO() {
   const t = new Date();
@@ -126,20 +130,27 @@ function selectPatient(i, li) {
 
 // 뷰어 렌더링
 function renderViewer() {
-  document.getElementById('defaultImageText').style.display = 'none';
-  document.getElementById('viewerImg').style.display = 'none';
-  document.getElementById('mprContainer').style.display = 'none';
+  const currentMri = mri[idx];
+  const hasImage = currentMri && currentMri.src;
 
-  const mprContainer = document.getElementById('mprContainer');
-  // 3D
+  defaultImageTextEl.style.display = 'none';
+  viewerImgEl.style.display = 'none';
+  mprContainerEl.style.display = 'none';
+
+  if (!hasImage) {
+    defaultImageTextEl.textContent = "No Image";
+    defaultImageTextEl.style.display = 'flex';
+    return;
+  }
+
   if (currentViewMode === '3D') {
-    // document.getElementById('defaultImageText').style.display = 'none';
-    // viewerRoot.innerHTML = '';
-    viewerRoot.appendChild(mprContainer);
-    mprContainer.style.display = 'block';
-    // document.querySelector('.three-panel').style.display = 'grid';
+    // 3D
+    mprContainerEl.style.display = 'block';
 
-    if (!mri[idx].src.endsWith('.nii') && !mri[idx].src.endsWith('.nii.gz')) {
+    if (currentMri.src.endsWith('.nii') || currentMri.src.endsWith('.nii.gz')) {
+      loadNiftiFromURL(currentMri.src);
+    } else {
+      // NIfTI 파일이 아닌 경우 초기화
       ['axialCanvas', 'sagittalCanvas', 'coronalCanvas'].forEach(id => {
         const c = document.getElementById(id);
         if (c) {
@@ -148,36 +159,25 @@ function renderViewer() {
           ctx.fillRect(0, 0, c.width || 256, c.height || 256);
         }
       });
-      return;
     }
-    loadNiftiFromURL(mri[idx].src);
-  }
-  // 2D
-  else {
-    mprContainer.style.display = 'none';
-    viewerRoot.innerHTML = '';
-    const img = document.createElement('img');
-    img.src = mri[idx].src;
-    img.alt = '2D MRI';
-    img.style.maxWidth = '100%';
-    img.style.maxHeight = '100%';
-    viewerRoot.appendChild(img);
 
-    if (mri[idx].src === undefined) {
-      viewerRoot.innerText = "No Image";
-    }
+  } else {
+    // 2D
+    viewerImgEl.style.display = 'block';
+    viewerImgEl.src = currentMri.src;
+    viewerImgEl.alt = currentMri.title || '2D MRI';
   }
 }
 
-function render3DView(p) {
-  // const div = document.createElement('div');
-  // div.style.display = 'flex';
-  // div.style.alignItems = 'center';
-  // div.style.justifyContent = 'center';
-  // div.style.height = '100%';
-  // //  div.textContent = '3D 해마 세그 뷰어 (추후 연동)';
-  // viewerRoot.appendChild(div);
-}
+// function render3DView(p) {
+//   const div = document.createElement('div');
+//   div.style.display = 'flex';
+//   div.style.alignItems = 'center';
+//   div.style.justifyContent = 'center';
+//   div.style.height = '100%';
+//   div.textContent = '3D 해마 세그 뷰어 (추후 연동)';
+//   viewerRoot.appendChild(div);
+// }
 
 async function loadNiftiFromURL(url) {
   const loadingText = document.getElementById('loadingText');
@@ -306,7 +306,6 @@ document.getElementById('btnUpload').addEventListener('click', () => {
 document.getElementById('fileInput').addEventListener('change', async (e) => {
   const file = e.target.files[0];
   if (!file) return;
-  await loadNiftiFile(file);
 });
 
 document.getElementById('sliceSlider').addEventListener('input', (e) => {

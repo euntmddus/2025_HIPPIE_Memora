@@ -127,27 +127,21 @@ function selectPatient(i, li) {
 // 뷰어 렌더링
 function renderViewer() {
   viewerRoot.innerHTML = '';
-
   document.getElementById('mprContainer').style.display =
         currentViewMode === '3D' ? 'block' : 'none';
 
-  const p = patients[currentPatientIndex];
-  if (!p) {
-    viewerRoot.textContent = 'No Patient';
-    return;
-  }
-  if (currentViewMode === '2D') {
-    document.querySelector('.three-panel').style.display = 'none';
-    render2DView(p);
-  } else if (currentViewMode === '3D') {
+  if (currentViewMode === '3D') {
     document.querySelector('.three-panel').style.display = 'grid';
-
+    const p = patients[currentPatientIndex];
     if (!mri[idx].src.endsWith('.nii') && !mri[idx].src.endsWith('.nii.gz')) {
+      ['axialCanvas','sagittalCanvas','coronalCanvas'].forEach(id=>{
+        const c = document.getElementById(id);
+        const ctx = c.getContext('2d');
+        ctx.fillStyle='#000'; ctx.fillRect(0,0,c.width||256,c.height||256);
+      });
       return;
     }
     loadNiftiFromURL(mri[idx].src);
-
-    render3DView(p);
   }
 }
 

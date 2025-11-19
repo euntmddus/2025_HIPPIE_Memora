@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <title>Hipple MRI</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div class="app">
+
+    <div class="toolbar">
+      <button class="tool-btn" id="btnSave">저장</button>
+      <div class="tool-sep"></div>
+      <button class="tool-btn" id="btnUpload">MRI 업로드</button>
+      <input
+        type="file"
+        id="fileInput"
+        accept=".nii,.nii.gz,.zip"
+        hidden
+      />
+
+      <div style="margin-left:auto" class="muted mono">발행: <span id="issuedAt">—</span></div>
+    </div>
+
+    <div class="panes">
+
+      <div class="panel">
+        <div class="panel-header">환자 목록</div>
+        <div class="panel-body">
+          <ul class="patient-list" id="patientList"></ul>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">영상 뷰어</div>
+        <div class="panel-body">
+          <div class="view-toggle-row">
+            <button type="button" class="tool-btn" id="btnView2D">2D</button>
+            <button type="button" class="tool-btn" id="btnView3D">3D</button>
+          </div>
+          <div class="viewer" id="mainViewer">No Image</div>
+
+          <div id="mprContainer" style="display:none;">
+            <div class="three-panel">
+                <!-- Axial -->
+                <div id="axialPanel" class="three-subpanel">
+                  <canvas id="axialCanvas"></canvas>
+                  <div class="info">Axial: <span id="axialInfo">-</span></div>
+                </div>
+
+                <!-- Sagittal -->
+                <div id="sagittalPanel" class="three-subpanel">
+                  <canvas id="sagittalCanvas"></canvas>
+                  <div class="info">Sagittal: <span id="sagittalInfo">-</span></div>
+                </div>
+
+                <!-- Coronal -->
+                <div id="coronalPanel" class="three-subpanel">
+                  <canvas id="coronalCanvas"></canvas>
+                  <div class="info">Coronal: <span id="coronalInfo">-</span></div>
+                </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">환자 정보</div>
+        <div class="panel-body">
+          <div class="kv"><b>환자명</b><span id="ptName">—</span></div>
+          <div class="kv"><b>성별/나이</b><span id="ptSexAge">—</span></div>
+          <div class="kv"><b>신체 정보</b><ul id="ptVitals" class="vitals-list"></ul></div>
+
+          <div class="section-title">검사 결과 요약</div>
+          <textarea id="summaryBox" class="textarea"></textarea>
+
+          <div class="section-title">영상 분석 지표</div>
+          <ul id="featureList" class="vitals-list"></ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="log-panel">
+      <div class="section-title">작업 로그</div>
+      <div class="log-list" id="logList"></div>
+    </div>
+  </div>
+
+  <script src="js/script.js"></script>
+</body>
+</html>

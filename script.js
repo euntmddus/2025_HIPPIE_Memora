@@ -129,7 +129,7 @@ function renderViewer() {
   const mprContainer = document.getElementById('mprContainer');
   // 3D
   if (currentViewMode === '3D') {
-    mprContainer.style.display = 'block';
+    // mprContainer.style.display = 'block';
     document.querySelector('.three-panel').style.display = 'grid';
 
     if (!mri[idx].src.endsWith('.nii') && !mri[idx].src.endsWith('.nii.gz')) {
@@ -147,7 +147,7 @@ function renderViewer() {
   }
   // 2D
   else {
-    mprContainer.style.display = 'none';
+    mprContainer.style.display = '';
 
     viewerRoot.innerHTML = '';
     const img = document.createElement('img');

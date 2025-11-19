@@ -126,11 +126,18 @@ function selectPatient(i, li) {
 
 // 뷰어 렌더링
 function renderViewer() {
+  document.getElementById('defaultImageText').style.display = 'none';
+  document.getElementById('viewerImg').style.display = 'none';
+  document.getElementById('mprContainer').style.display = 'none';
+
   const mprContainer = document.getElementById('mprContainer');
   // 3D
   if (currentViewMode === '3D') {
-    // mprContainer.style.display = 'block';
-    document.querySelector('.three-panel').style.display = 'grid';
+    // document.getElementById('defaultImageText').style.display = 'none';
+    // viewerRoot.innerHTML = '';
+    viewerRoot.appendChild(mprContainer);
+    mprContainer.style.display = 'block';
+    // document.querySelector('.three-panel').style.display = 'grid';
 
     if (!mri[idx].src.endsWith('.nii') && !mri[idx].src.endsWith('.nii.gz')) {
       ['axialCanvas', 'sagittalCanvas', 'coronalCanvas'].forEach(id => {
@@ -147,8 +154,7 @@ function renderViewer() {
   }
   // 2D
   else {
-    mprContainer.style.display = '';
-
+    mprContainer.style.display = 'none';
     viewerRoot.innerHTML = '';
     const img = document.createElement('img');
     img.src = mri[idx].src;
@@ -156,6 +162,10 @@ function renderViewer() {
     img.style.maxWidth = '100%';
     img.style.maxHeight = '100%';
     viewerRoot.appendChild(img);
+
+    if (mri[idx].src === undefined) {
+      viewerRoot.innerText = "No Image";
+    }
   }
 }
 

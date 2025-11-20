@@ -29,6 +29,26 @@ const defaultImageTextEl = document.getElementById('defaultImageText');
 const viewerImgEl = document.getElementById('viewerImg');
 const mprContainerEl = document.getElementById('mprContainer');
 
+// const sliceSlider = document.getElementById('sliceSlider');
+// if (sliceSlider) {
+//     sliceSlider.addEventListener('input', (e) => {
+//         const val = parseInt(e.target.value);
+//         currentSlice.axial = Math.floor((val / 100) * (dims[2] - 1));
+//         document.getElementById('sliceValue').textContent = val;
+//         renderAxial();
+//     });
+// }
+
+const brightnessEl = document.getElementById('brightness');
+if (brightnessEl) {
+  brightnessEl.addEventListener('input', (e) => {
+    brightness = parseFloat(e.target.value);
+    document.getElementById('brightnessValue').textContent = brightness.toFixed(1);
+    renderAll();
+  });
+}
+
+
 // 유틸
 function todayISO() {
   const t = new Date();
@@ -184,7 +204,7 @@ async function loadNiftiFromURL(url) {
   try {
     loadingText.textContent = 'NIfTI 로딩 중…';
 
-    const res = await fetch(url);
+    const res = await fetch("http://127.0.0.1:8000/api/process_mri");
     const buf = new Uint8Array(await res.arrayBuffer());
 
     const header = parseNiftiHeader(buf);
@@ -243,18 +263,11 @@ document.getElementById('fileInput').onchange = async e => {
     fd.append('age', String(p.age));
     fd.append('apoe4', String(p.apoe4));
     fd.append('sex', p.sex);
-    fd.append('icv', String(p.icv || ""));
+    if (p.icv) fd.append('icv', String(p.icv));
+    else fd.append('icv', null);
 
-    const res = await fetch('http://127.0.0.1:8000/api/process_mri', {
-      method: 'POST',
-      body: fd
-    });
 
-    if (!res.ok) {
-      log('서버 오류: ' + res.status);
-      return;
-    }
-
+    const res = await fetch(url);
     const result = await res.json();
     applyServerResult(result);
     log('분석 완료: ' + (result.label || 'N/A'));
@@ -298,22 +311,22 @@ init();
 let imageData = null, dims = null, brightness = 1.0;
 let currentSlice = { axial: 0, sagittal: 0, coronal: 0 };
 
-document.getElementById('btnUpload').addEventListener('click', () => {
-  if (currentViewMode !== '3D') return;
-  document.getElementById('fileInput').click();
-});
+// document.getElementById('btnUpload').addEventListener('click', () => {
+//   if (currentViewMode !== '3D') return;
+//   document.getElementById('fileInput').click();
+// });
 
-document.getElementById('fileInput').addEventListener('change', async (e) => {
-  const file = e.target.files[0];
-  if (!file) return;
-});
+// document.getElementById('fileInput').addEventListener('change', async (e) => {
+//   const file = e.target.files[0];
+//   if (!file) return;
+// });
 
-document.getElementById('sliceSlider').addEventListener('input', (e) => {
-  const val = parseInt(e.target.value);
-  currentSlice.axial = Math.floor((val / 100) * (dims[2] - 1));
-  document.getElementById('sliceValue').textContent = val;
-  renderAxial();
-});
+// document.getElementById('sliceSlider').addEventListener('input', (e) => {
+//   const val = parseInt(e.target.value);
+//   currentSlice.axial = Math.floor((val / 100) * (dims[2] - 1));
+//   document.getElementById('sliceValue').textContent = val;
+//   renderAxial();
+// });
 
 document.getElementById('brightness').addEventListener('input', (e) => {
   brightness = parseFloat(e.target.value);
@@ -531,7 +544,7 @@ document.getElementById('axialPanel').addEventListener('wheel', (e) => {
   renderAxial();
 
   const percent = Math.round((currentSlice.axial / (dims[2] - 1)) * 100);
-  document.getElementById('sliceSlider').value = percent;
+  // document.getElementById('sliceSlider').value = percent;
   document.getElementById('sliceValue').textContent = percent;
 });
 

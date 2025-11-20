@@ -1,5 +1,4 @@
 # backend/main.py
-from datetime import time
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -13,8 +12,15 @@ import nibabel as nib
 import numpy as np
 import xgboost as xgb
 import pymysql
-from typing import List
+import base64
+from typing import List, Optional
 from scipy.ndimage import label as cc_label
+
+import json
+import plotly.graph_objects as go
+from skimage import measure
+from scipy.ndimage import binary_closing
+from skimage.filters import gaussian
 
 app = FastAPI()
 
@@ -80,6 +86,7 @@ class ProcessResult(BaseModel):
     probs: dict
     summary: str
     features: dict
+    mask_base64: str | None = None
 
 # 환자 목록
 class PatientOut(BaseModel):
@@ -239,7 +246,7 @@ def compute_features(left_path: Path, right_path: Path, icv: float | None):
 
 # XGBoost
 def build_vec(feats):
-    return np.array([float(feats.get(c, 0)) for c in FEATURE_COLS], dtype=np.float32).reshape(1, -1)
+    return np.array([float(feats.get(c) or 0) for c in FEATURE_COLS], dtype=np.float32).reshape(1, -1)
 
 
 def infer(feats):
@@ -263,7 +270,7 @@ def make_summary(label, probs, feats):
 
 
 # DB 저장
-def save_db(pid, filename, feats, label, probs, exam_id):
+def save_db(pid, filename, feats, label, probs):
     conn = pymysql.connect(**DB_CONFIG)
     try:
         with conn.cursor() as cur:
@@ -274,9 +281,8 @@ def save_db(pid, filename, feats, label, probs, exam_id):
                     prob_cn, prob_ad,
                     left_hipp_vol, right_hipp_vol, total_hipp_vol,
                     icv, age, sex, apoe4,
-                    filename,
-                    exam_id
-                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    filename
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 """,
                 (
                     pid,
@@ -291,7 +297,6 @@ def save_db(pid, filename, feats, label, probs, exam_id):
                     "F" if feats["SEX_FEMALE"] else "M",
                     feats["APOE4"],
                     filename,
-                    exam_id,
                 ),
             )
         conn.commit()
@@ -336,10 +341,7 @@ async def process_mri(
     apoe4: int = Form(...),
     sex: str = Form(...),
     icv: float | None = Form(None),
-    exam_id: str | None = Form(None)
 ):
-    if not exam_id:
-        exam_id = f"EXAM_{int(time.time())}"
         
     tmp = save_file_tmp(file)
 
@@ -366,7 +368,13 @@ async def process_mri(
     summary = make_summary(label, probs, feats)
 
     # DB
-    save_db(patient_id, file.filename, feats, label, probs, exam_id)
+    save_db(patient_id, file.filename, feats, label, probs)
+    
+    mask_b64 = None
+    if pred.exists():
+        with open(pred, "rb") as f:
+            # 파일을 바이너리로 읽어서 Base64로 인코딩 후 문자열로 변환
+            mask_b64 = base64.b64encode(f.read()).decode('utf-8')
 
     return JSONResponse(
         ProcessResult(
@@ -374,5 +382,161 @@ async def process_mri(
             probs=probs,
             summary=summary,
             features=feats,
-        )
+            mask_base64=mask_b64
+        ).dict()
     )
+    
+class MaskRequest(BaseModel):
+    mask_base64: str
+
+# backend/main.py
+
+# backend/main.py
+
+# Permalink: (replace with your repo file URL if needed)
+@app.post("/api/get_plotly_3d")
+async def get_plotly_3d(req: MaskRequest):
+    try:
+        print(">>> [3D 최종 v3] 요청 시작")
+        import base64, gzip
+        decoded = base64.b64decode(req.mask_base64)
+        if decoded[:2] == b'\x1f\x8b':
+            decoded = gzip.decompress(decoded)
+
+        with tempfile.NamedTemporaryFile(suffix=".nii", delete=False) as tmp:
+            tmp.write(decoded)
+            tmp_path = tmp.name
+
+        img = nib.load(tmp_path)
+        data = np.round(img.get_fdata()).astype(int)
+        Path(tmp_path).unlink()
+
+        total_voxels = int(np.sum(data > 0))
+        print(f">>> [3D 데이터] 전체 해마 복셀 수: {total_voxels}")
+
+        if total_voxels < 10:
+            return JSONResponse({"status": "error", "message": "해마 데이터가 너무 작거나 없습니다."}, status_code=400)
+
+        traces = []
+        overall_min = np.array([np.inf, np.inf, np.inf], dtype=float)
+        overall_max = -overall_min
+
+        # 전역 중심: 모든 해마(라벨>0) 좌표의 평균 (z,y,x)
+        all_coords = np.argwhere(data > 0)
+        global_centroid = np.mean(all_coords, axis=0)  # (z,y,x)
+        # convert to xyz for subtraction: [x,y,z]
+        global_centroid_xyz = np.array([global_centroid[2], global_centroid[1], global_centroid[0]])
+        print(f">>> [DEBUG] global centroid (z,y,x)={global_centroid}, as xyz={global_centroid_xyz}")
+
+        def update_bounds(verts_xyz):
+            nonlocal overall_min, overall_max
+            if verts_xyz is None or len(verts_xyz) == 0:
+                return
+            vmin = np.min(verts_xyz, axis=0)
+            vmax = np.max(verts_xyz, axis=0)
+            overall_min = np.minimum(overall_min, vmin)
+            overall_max = np.maximum(overall_max, vmax)
+
+        def create_trace(label_id, color, name):
+            cnt = int(np.sum(data == label_id))
+            if cnt < 10:
+                print(f">>> [DEBUG] {name} voxel count too small: {cnt}")
+                return None
+            m = (data == label_id).astype(np.uint8)
+            try:
+                verts, faces, _, _ = measure.marching_cubes(m, 0.5, step_size=1)
+                # marching_cubes often returns coords as (z,y,x) -> convert to (x,y,z)
+                verts_xyz = np.vstack([verts[:, 2], verts[:, 1], verts[:, 0]]).T
+                # subtract global centroid so left/right keep relative positions
+                verts_centered = verts_xyz - global_centroid_xyz
+                update_bounds(verts_centered)
+
+                trace = go.Mesh3d(
+                    x=verts_centered[:, 0].tolist(),
+                    y=verts_centered[:, 1].tolist(),
+                    z=verts_centered[:, 2].tolist(),
+                    i=faces[:, 0].tolist(),
+                    j=faces[:, 1].tolist(),
+                    k=faces[:, 2].tolist(),
+                    color=color,
+                    opacity=0.9,
+                    name=name,
+                    flatshading=False,
+                    lighting=dict(ambient=0.6, diffuse=0.8, specular=0.2),
+                )
+                print(f">>> [DEBUG] {name}: verts={len(verts_centered)}, faces={len(faces)}")
+                return trace
+            except Exception as e:
+                print(f">>> [ERROR] 메쉬 생성 실패 ({name}): {e}")
+                return None
+
+        t1 = create_trace(1, '#27ae60', 'Left Hippocampus')
+        if t1: traces.append(t1)
+        t2 = create_trace(2, '#e74c3c', 'Right Hippocampus')
+        if t2: traces.append(t2)
+
+        # If no traces, provide debug cube
+        if len(traces) == 0:
+            print(">>> [WARN] 메쉬가 생성되지 않았습니다. 테스트 큐브를 추가합니다.")
+            cube = go.Mesh3d(
+                x=[-10, -10, 10, 10, -10, -10, 10, 10],
+                y=[-10, 10, 10, -10, -10, 10, 10, -10],
+                z=[-10, -10, -10, -10, 10, 10, 10, 10],
+                i=[7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2],
+                j=[3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3],
+                k=[0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
+                color='gray',
+                opacity=0.5,
+                name='Test Cube',
+                alphahull=0
+            )
+            traces.append(cube)
+            overall_min = np.minimum(overall_min, np.array([-10, -10, -10]))
+            overall_max = np.maximum(overall_max, np.array([10, 10, 10]))
+
+        # compute ranges and padding
+        if np.isfinite(overall_min).all():
+            span = overall_max - overall_min
+            span[span == 0] = 1.0
+            padding = span * 0.15 + 1.0
+            x_range = [float(overall_min[0] - padding[0]), float(overall_max[0] + padding[0])]
+            y_range = [float(overall_min[1] - padding[1]), float(overall_max[1] + padding[1])]
+            z_range = [float(overall_min[2] - padding[2]), float(overall_max[2] + padding[2])]
+            center_xyz = ((overall_min + overall_max) / 2.0).tolist()
+            span_max = float(np.max(span))
+            print(f">>> [DEBUG] bounds min={overall_min}, max={overall_max}, center={center_xyz}, span_max={span_max}")
+        else:
+            x_range = [-100, 100]; y_range = [-100, 100]; z_range = [-100, 100]
+            center_xyz = [0, 0, 0]
+            span_max = 50.0
+            print(">>> [WARN] overall bounds invalid, using fallback ranges")
+
+        fig = go.Figure(data=traces)
+        fig.update_layout(
+            scene=dict(
+                xaxis=dict(visible=True, range=x_range, title='X'),
+                yaxis=dict(visible=True, range=y_range, title='Y'),
+                zaxis=dict(visible=True, range=z_range, title='Z'),
+                aspectmode='data',
+                bgcolor='white'    
+            ),
+            paper_bgcolor='white',
+            margin=dict(l=0, r=0, b=0, t=0)
+        )
+
+        # set camera to look at center, placed diagonally away proportional to span_max
+        eye_dist = max( span_max * 2.5, 50.0 )  # ensure not too close
+        cam = dict(
+            eye=dict(x=1.25, y=1.25, z=1.25),
+            center=dict(x=0, y=0, z=0),
+            up=dict(x=0, y=0, z=1)
+        )
+        fig.update_layout(scene_camera=cam)
+
+        print(f">>> [3D 완료 v3] trace 수: {len(traces)}, camera eye_dist={eye_dist}")
+        return JSONResponse(content=json.loads(fig.to_json()))
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)

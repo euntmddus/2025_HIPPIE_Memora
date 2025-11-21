@@ -96,6 +96,10 @@ class PatientOut(BaseModel):
     name: str
     sex: str
     age: int
+    height_cm: int | None = None # 추가됨
+    weight_kg: int | None = None # 추가됨
+    icv: float | None = None 
+    apoe4: int | None = 0
 
 class MaskRequest(BaseModel):
     mask_base64: str
@@ -269,7 +273,7 @@ def make_summary(label, probs, feats):
     AD = round(probs["AD"])
     guide = "정상 범위로 예측됨." if label == "CN" else "알츠하이머 가능성이 높음."
     return (
-        f"AI 예측: {label}\n"
+        f"모델 예측: {label}\n"
         f"{guide}\n\n"
         f"확률: CN {CN}% · AD {AD}%\n"
         f"총 해마 부피: {feats['total_hipp_vol_mm3']} mm³"
@@ -337,6 +341,9 @@ def get_patients():
                     patient_id,
                     name,
                     sex,
+                    height_cm,
+                    weight_kg,
+                    icv, apoe4,
                     TIMESTAMPDIFF(
                         YEAR,
                         STR_TO_DATE(
@@ -411,9 +418,22 @@ async def process_mri(
     
     # 6. 마스크 파일 처리
     mask_b64 = None
+    import os
     if pred.exists():
-        with open(pred, "rb") as f:
-            mask_b64 = base64.b64encode(f.read()).decode('utf-8')
+        try:
+            size_bytes = os.path.getsize(pred)
+            print(f">>> DEBUG: pred exists at {pred} size={size_bytes} bytes")
+            with open(pred, "rb") as f:
+                data_bytes = f.read()
+                print(f">>> DEBUG: read pred bytes: {len(data_bytes)}")
+                mask_b64 = base64.b64encode(data_bytes).decode('utf-8')
+                print(f">>> DEBUG: mask_base64 length: {len(mask_b64)}")
+        except Exception as e:
+            print(">>> ERROR reading pred file:", e)
+            mask_b64 = None
+    else:
+        print(">>> DEBUG: pred file does NOT exist:", pred)
+        mask_b64 = None
 
     # 7. 결과 반환
     return JSONResponse(

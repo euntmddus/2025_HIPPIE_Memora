@@ -1,4 +1,5 @@
 # backend/main.py
+from datetime import datetime
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -98,6 +99,13 @@ class PatientOut(BaseModel):
 
 class MaskRequest(BaseModel):
     mask_base64: str
+    
+class ExamHistoryItem(BaseModel):
+    exam_id: int
+    exam_datetime: str
+    label: str
+    total_hipp_vol: int
+    created_at: str
 
 # 공통 함수
 def save_file_tmp(upload: UploadFile) -> Path:
@@ -267,9 +275,24 @@ def make_summary(label, probs, feats):
         f"총 해마 부피: {feats['total_hipp_vol_mm3']} mm³"
     )
 
-
+def save_exam(patient_id, exam_dt):
+    conn = pymysql.connect(**DB_CONFIG)
+    try:
+        with conn.cursor() as cur:
+            # mri_exams 테이블에 날짜 저장
+            cur.execute(
+                "INSERT INTO mri_exams (patient_id, exam_datetime) VALUES (%s, %s)",
+                (patient_id, exam_dt)
+            )
+            # 방금 저장된 행의 ID(exam_id)를 가져옴 (★핵심)
+            exam_id = cur.lastrowid 
+        conn.commit()
+        return exam_id
+    finally:
+        conn.close()
+        
 # DB 저장
-def save_db(pid, filename, feats, label, probs):
+def save_db(pid, filename, feats, label, probs, exam_id):
     conn = pymysql.connect(**DB_CONFIG)
     try:
         with conn.cursor() as cur:
@@ -280,8 +303,8 @@ def save_db(pid, filename, feats, label, probs):
                     prob_cn, prob_ad,
                     left_hipp_vol, right_hipp_vol, total_hipp_vol,
                     icv, age, sex, apoe4,
-                    filename
-                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    filename, exam_id 
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 """,
                 (
                     pid,
@@ -296,6 +319,7 @@ def save_db(pid, filename, feats, label, probs):
                     "F" if feats["SEX_FEMALE"] else "M",
                     feats["APOE4"],
                     filename,
+                    exam_id  # ★ 여기에 exam_id 추가됨
                 ),
             )
         conn.commit()
@@ -340,53 +364,109 @@ async def process_mri(
     apoe4: int = Form(...),
     sex: str = Form(...),
     icv: float | None = Form(None),
+    exam_datetime: str | None = Form(None) 
 ):
-        
+    # 1. 파일 저장 및 변환
     tmp = save_file_tmp(file)
-
-    # ZIP → DICOM 변환
     if tmp.suffix.lower() == ".zip":
         nii = dicom_to_nifti(tmp)
     else:
         nii = tmp
 
-    # segmentation (WSL + HippMapp3r CLI)
+    # 2. ★★★ [중요] dt_obj 정의 부분 ★★★
+    # 클라이언트가 날짜를 보냈으면 그걸 쓰고, 없으면 현재 시간을 씁니다.
+    if exam_datetime:
+        try:
+            # ISO 포맷 등 파싱 시도
+            dt_obj = datetime.strptime(exam_datetime, '%Y-%m-%d %H:%M:%S')
+        except:
+            try:
+                # ISO 포맷 (T 포함) 파싱 시도
+                dt_obj = datetime.fromisoformat(exam_datetime.replace('T', ' '))
+            except:
+                # 실패하면 현재 시간
+                dt_obj = datetime.now()
+    else:
+        # 날짜 정보가 없으면 현재 시간
+        dt_obj = datetime.now()
+
+    # 3. 분석 실행
     pred = run_hippmapp3r(nii)
-
-    # left/right 생성
     left, right = split_left_right(pred)
-
-    # feature 계산
     feats = compute_features(left, right, icv)
     feats["AGE"] = age
     feats["APOE4"] = apoe4
     feats["SEX_FEMALE"] = 1.0 if sex.upper().startswith("F") else 0.0
-
-    # XGBoost
+    
+    # 4. AI 예측
     label, probs = infer(feats)
     summary = make_summary(label, probs, feats)
 
-    # DB
-    save_db(patient_id, file.filename, feats, label, probs)
+    # 5. DB 저장 (여기서 정의된 dt_obj를 사용합니다)
+    # (1) 검사 정보(Exam) 저장 -> ID 획득
+    exam_id = save_exam(patient_id, dt_obj) 
     
+    # (2) 결과 정보(Result) 저장 (획득한 ID 사용)
+    save_db(patient_id, file.filename, feats, label, probs, exam_id)
+    
+    # 6. 마스크 파일 처리
     mask_b64 = None
     if pred.exists():
         with open(pred, "rb") as f:
-            # 파일을 바이너리로 읽어서 Base64로 인코딩 후 문자열로 변환
             mask_b64 = base64.b64encode(f.read()).decode('utf-8')
 
+    # 7. 결과 반환
     return JSONResponse(
         ProcessResult(
             label=label,
             probs=probs,
             summary=summary,
             features=feats,
-            mask_base64=mask_b64
+            mask_base64=mask_b64,
+            exam_datetime=dt_obj.strftime('%Y-%m-%d %H:%M:%S'),
+            exam_id=exam_id
         ).dict()
     )
     
-# backend/main.py
+    
 
+@app.get("/api/patients/{patient_id}/history", response_model=List[ExamHistoryItem])
+def get_patient_history(patient_id: str):
+    conn = pymysql.connect(**DB_CONFIG)
+    try:
+        with conn.cursor() as cur:
+            query = """
+                SELECT 
+                    r.exam_id,
+                    DATE_FORMAT(e.exam_datetime, '%%Y-%%m-%%d %%H:%%i:%%s') as exam_datetime,
+                    r.label,
+                    r.total_hipp_vol,
+                    DATE_FORMAT(r.created_at, '%%Y-%%m-%%d %%H:%%i:%%s') as created_at
+                FROM mri_results r
+                JOIN mri_exams e ON r.exam_id = e.id
+                WHERE r.patient_id = %s
+                ORDER BY e.exam_datetime DESC
+            """
+            cur.execute(query, (patient_id,))
+            rows = cur.fetchall()
+            history = []
+            for row in rows:
+                history.append(ExamHistoryItem(
+                    exam_id=row['exam_id'],
+                    exam_datetime=str(row['exam_datetime']),
+                    label=row['label'],
+                    total_hipp_vol=row['total_hipp_vol'],
+                    created_at=str(row['created_at'])
+                ))
+            return history
+    except pymysql.MySQLError as e:
+        # 로그 남기고, JSON으로 명확히 반환 (CORS 미들 문제 완화)
+        print("DB error in get_patient_history:", e)
+        return JSONResponse({"status": "error", "message": "DB error: " + str(e)}, status_code=500)
+    finally:
+        conn.close()
+        
+        
 @app.post("/api/get_plotly_3d")
 async def get_plotly_3d(req: MaskRequest):
     try:

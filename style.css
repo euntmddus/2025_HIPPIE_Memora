@@ -189,6 +189,8 @@ body {
 }
 
 .nifti-views {
+  width: 100%;
+  height: 100%;
   flex: 1;
   display: grid;
   grid-template-columns: 1fr 1fr;

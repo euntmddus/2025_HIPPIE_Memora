@@ -15,7 +15,6 @@ import pymysql
 import base64
 from typing import List, Optional
 from scipy.ndimage import label as cc_label
-
 import json
 import plotly.graph_objects as go
 from skimage import measure
@@ -87,6 +86,8 @@ class ProcessResult(BaseModel):
     summary: str
     features: dict
     mask_base64: str | None = None
+    exam_datetime: str | None = None
+    exam_id: int | None = None
 
 # 환자 목록
 class PatientOut(BaseModel):
@@ -95,6 +96,8 @@ class PatientOut(BaseModel):
     sex: str
     age: int
 
+class MaskRequest(BaseModel):
+    mask_base64: str
 
 # 공통 함수
 def save_file_tmp(upload: UploadFile) -> Path:
@@ -131,11 +134,7 @@ def win_to_wsl(path: Path | str) -> str:
 
 
 def run_hippmapp3r(nii: Path) -> Path:
-    """
-    세그멘테이션만 WSL(Ubuntu)에서 HippMapp3r CLI(hippmapper seg_hipp)로 실행.
-    QC 단계(ANTs ConvertScalarImageToRGB 실패)는 무시하고,
-    pred.nii.gz가 있으면 성공으로 간주.
-    """
+
     out_dir = nii.parent / "hippmapp3r"
     out_dir.mkdir(exist_ok=True)
 
@@ -386,14 +385,8 @@ async def process_mri(
         ).dict()
     )
     
-class MaskRequest(BaseModel):
-    mask_base64: str
-
 # backend/main.py
 
-# backend/main.py
-
-# Permalink: (replace with your repo file URL if needed)
 @app.post("/api/get_plotly_3d")
 async def get_plotly_3d(req: MaskRequest):
     try:
@@ -474,25 +467,6 @@ async def get_plotly_3d(req: MaskRequest):
         if t1: traces.append(t1)
         t2 = create_trace(2, '#e74c3c', 'Right Hippocampus')
         if t2: traces.append(t2)
-
-        # If no traces, provide debug cube
-        if len(traces) == 0:
-            print(">>> [WARN] 메쉬가 생성되지 않았습니다. 테스트 큐브를 추가합니다.")
-            cube = go.Mesh3d(
-                x=[-10, -10, 10, 10, -10, -10, 10, 10],
-                y=[-10, 10, 10, -10, -10, 10, 10, -10],
-                z=[-10, -10, -10, -10, 10, 10, 10, 10],
-                i=[7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2],
-                j=[3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3],
-                k=[0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
-                color='gray',
-                opacity=0.5,
-                name='Test Cube',
-                alphahull=0
-            )
-            traces.append(cube)
-            overall_min = np.minimum(overall_min, np.array([-10, -10, -10]))
-            overall_max = np.maximum(overall_max, np.array([10, 10, 10]))
 
         # compute ranges and padding
         if np.isfinite(overall_min).all():

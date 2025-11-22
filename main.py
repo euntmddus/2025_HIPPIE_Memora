@@ -329,13 +329,13 @@ def save_db(pid, filename, feats, label, probs, exam_id):
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO mri_results (
-                    patient_id, label,
-                    prob_cn, prob_ad,
-                    left_hipp_vol, right_hipp_vol, total_hipp_vol,
-                    icv, age, sex, apoe4,
-                    filename, exam_id 
-                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                INSERT INTO mri_results 
+                (
+                    patient_id, label, prob_cn, prob_ad, 
+                    left_hipp_vol, right_hipp_vol, total_hipp_vol, 
+                    icv, age, sex, apoe4, filename, exam_id
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     pid,
@@ -346,11 +346,11 @@ def save_db(pid, filename, feats, label, probs, exam_id):
                     feats["right_hipp_vol_mm3"],
                     feats["total_hipp_vol_mm3"],
                     feats["icv"],
-                    feats["AGE"],
+                    feats["AGE"],           
                     "F" if feats["SEX_FEMALE"] else "M",
                     feats["APOE4"],
                     filename,
-                    exam_id  # ★ 여기에 exam_id 추가됨
+                    exam_id
                 ),
             )
         conn.commit()

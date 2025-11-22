@@ -21,6 +21,7 @@ import plotly.graph_objects as go
 from skimage import measure
 from scipy.ndimage import binary_closing
 from skimage.filters import gaussian
+from nilearn.masking import compute_brain_mask
 
 app = FastAPI()
 
@@ -193,7 +194,33 @@ def run_hippmapp3r(nii: Path) -> Path:
 
     return pred_path
 
+def calculate_icv_nilearn(nifti_path: Path) -> float:
+    """
+    Nilearn을 사용하여 ICV(mm3)를 계산
+    """
+    try:
+        print(f" Nilearn ICV 계산 시작: {nifti_path}")
+        img = nib.load(str(nifti_path))
+        
+        # 뇌 마스크 생성
+        mask_img = compute_brain_mask(img, threshold=0.5, connected=True)
+        
+        # 부피 계산
+        mask_data = mask_img.get_fdata()
+        voxel_count = np.sum(mask_data > 0)
+        
+        header = img.header
+        zooms = header.get_zooms()
+        one_voxel_vol = zooms[0] * zooms[1] * zooms[2]
+        
+        icv_mm3 = voxel_count * one_voxel_vol
+        print(f" ICV 계산 완료: {icv_mm3:.2f} mm³")
+        return float(icv_mm3)
 
+    except Exception as e:
+        print(f" ICV 계산 실패: {e}")
+        return 0.0
+    
 
 def largest_cc(mask):
     labeled, comp = cc_label(mask)
@@ -371,7 +398,7 @@ async def process_mri(
     apoe4: int = Form(...),
     sex: str = Form(...),
     icv: float | None = Form(None),
-    exam_datetime: str | None = Form(None) 
+    exam_datetime: str | None = Form(None)
 ):
     # 1. 파일 저장 및 변환
     tmp = save_file_tmp(file)
@@ -380,43 +407,51 @@ async def process_mri(
     else:
         nii = tmp
 
-    # 2. ★★★ [중요] dt_obj 정의 부분 ★★★
-    # 클라이언트가 날짜를 보냈으면 그걸 쓰고, 없으면 현재 시간을 씁니다.
+    # 2. exam datetime 처리
     if exam_datetime:
         try:
-            # ISO 포맷 등 파싱 시도
             dt_obj = datetime.strptime(exam_datetime, '%Y-%m-%d %H:%M:%S')
         except:
             try:
-                # ISO 포맷 (T 포함) 파싱 시도
                 dt_obj = datetime.fromisoformat(exam_datetime.replace('T', ' '))
             except:
-                # 실패하면 현재 시간
                 dt_obj = datetime.now()
     else:
-        # 날짜 정보가 없으면 현재 시간
         dt_obj = datetime.now()
+
+    # 2-1. ICV 계산 처리
+    final_icv = icv
+    if final_icv is None or final_icv == 0:
+        print(" ICV 정보가 없어 자동 계산을 시작합니다...")
+        calculated_icv = calculate_icv_nilearn(nii)
+
+        if calculated_icv > 0:
+            final_icv = calculated_icv
+        else:
+            print("⚠️ ICV 계산 실패, 기본값 0.0 사용")
+            final_icv = 0.0
+
+    print(f" 최종 적용 ICV: {final_icv}")
 
     # 3. 분석 실행
     pred = run_hippmapp3r(nii)
     left, right = split_left_right(pred)
-    feats = compute_features(left, right, icv)
+
+    # 4. Feature 계산
+    feats = compute_features(left, right, final_icv)
     feats["AGE"] = age
     feats["APOE4"] = apoe4
     feats["SEX_FEMALE"] = 1.0 if sex.upper().startswith("F") else 0.0
-    
-    # 4. AI 예측
+
+    # 5. AI 예측
     label, probs = infer(feats)
     summary = make_summary(label, probs, feats)
 
-    # 5. DB 저장 (여기서 정의된 dt_obj를 사용합니다)
-    # (1) 검사 정보(Exam) 저장 -> ID 획득
-    exam_id = save_exam(patient_id, dt_obj) 
-    
-    # (2) 결과 정보(Result) 저장 (획득한 ID 사용)
+    # 6. DB 저장
+    exam_id = save_exam(patient_id, dt_obj)
     save_db(patient_id, file.filename, feats, label, probs, exam_id)
-    
-    # 6. 마스크 파일 처리
+
+    # 7. 마스크 파일 처리
     mask_b64 = None
     import os
     if pred.exists():
@@ -435,7 +470,7 @@ async def process_mri(
         print(">>> DEBUG: pred file does NOT exist:", pred)
         mask_b64 = None
 
-    # 7. 결과 반환
+    # 8. 결과 반환
     return JSONResponse(
         ProcessResult(
             label=label,
@@ -447,6 +482,7 @@ async def process_mri(
             exam_id=exam_id
         ).dict()
     )
+
     
     
 
@@ -602,34 +638,36 @@ async def get_plotly_3d(req: MaskRequest):
             annotations.append(dict(showarrow=False, x=0, y=0, z=max_z + padding, text="z", font=dict(color="black", size=14)))
 
         # [3] 레이아웃 & 카메라 설정 (핵심)
-        axis_style = dict(
-            showgrid=False, zeroline=False, showbackground=False, showticklabels=False,
-            visible=False, showline=False
-        )
+            axis_style = dict(
+                        showgrid=False, zeroline=False, showbackground=False, showticklabels=False,
+                        visible=False, showline=False
+                    )
 
-        fig.update_layout(
-            scene=dict(
-                xaxis=dict(**axis_style),
-                yaxis=dict(**axis_style),
-                zaxis=dict(**axis_style),
-                aspectmode='data',
-                bgcolor='white',
-                annotations=annotations,
-                
-                # ★ 카메라 설정 (scene 안에 넣어야 Home 버튼 기준이 됨)
-                camera=dict(
-                    # eye: (1.5, 1.5, 1.5)가 기본 대각선 쿼터뷰
-                    # y를 음수(-1.5)로 하면 시계방향으로 90도 회전된 위치
-                    eye=dict(x=1.5, y=-1.5, z=1.5),
-                    center=dict(x=0, y=0, z=0),
-                    up=dict(x=0, y=0, z=1)
-                )
-            ),
-            paper_bgcolor='white',
-            margin=dict(l=0, r=0, b=0, t=0)
-        )
+            fig.update_layout(
+                scene=dict(
+                    xaxis=dict(**axis_style),
+                    yaxis=dict(**axis_style),
+                    zaxis=dict(**axis_style),
+                    aspectmode='data',
+                    bgcolor='white',
+                    annotations=annotations,
+                    
+                    # ★ [추가됨] 카메라 설정을 scene 안에 직접 넣어야 'Home 버튼' 기준이 됩니다.
+                    # x=1.5, y=1.5, z=1.5 (기본)  -->  y를 -1.5로 바꾸면 시계방향 90도 회전
+                    camera=dict(
+                        eye=dict(x=1.5, y=-1.5, z=1.5),
+                        center=dict(x=0, y=0, z=0),
+                        up=dict(x=0, y=0, z=1)
+                    )
+                ),
+                paper_bgcolor='white',
+                margin=dict(l=0, r=0, b=0, t=0)
+            )
 
-        return JSONResponse(content=json.loads(fig.to_json()))
+            # ★ [삭제할 부분] 기존 코드 맨 아래에 있던 이 줄은 지워주세요!
+            # fig.update_layout(scene_camera=cam)  <-- 삭제 
+
+            return JSONResponse(content=json.loads(fig.to_json()))
 
     except Exception as e:
         import traceback

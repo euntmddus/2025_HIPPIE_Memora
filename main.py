@@ -490,7 +490,7 @@ def get_patient_history(patient_id: str):
 @app.post("/api/get_plotly_3d")
 async def get_plotly_3d(req: MaskRequest):
     try:
-        print(">>> [3D 최종 v3] 요청 시작")
+        print(">>> [3D 최종] 홈 버튼 고정 + 카메라 90도 회전 + 라벨/축 표시")
         import base64, gzip
         decoded = base64.b64decode(req.mask_base64)
         if decoded[:2] == b'\x1f\x8b':
@@ -504,47 +504,52 @@ async def get_plotly_3d(req: MaskRequest):
         data = np.round(img.get_fdata()).astype(int)
         Path(tmp_path).unlink()
 
-        total_voxels = int(np.sum(data > 0))
-        print(f">>> [3D 데이터] 전체 해마 복셀 수: {total_voxels}")
+        # 데이터 확인
+        if np.sum(data > 0) < 10:
+            return JSONResponse({"status": "error", "message": "해마 데이터가 없습니다."}, status_code=400)
 
-        if total_voxels < 10:
-            return JSONResponse({"status": "error", "message": "해마 데이터가 너무 작거나 없습니다."}, status_code=400)
+        # [1] 통합 중심점 계산 (겹침 해결)
+        coords = np.argwhere(data > 0)
+        # MRI 좌표 (z, y, x)
+        z_mean = np.mean(coords[:, 0])
+        y_mean = np.mean(coords[:, 1])
+        x_mean = np.mean(coords[:, 2])
+        
+        # 전체 데이터의 무게 중심 (이 점을 0,0,0으로 맞춤)
+        center = np.array([z_mean, y_mean, x_mean])
 
         traces = []
-        overall_min = np.array([np.inf, np.inf, np.inf], dtype=float)
-        overall_max = -overall_min
+        label_positions = {}
+        
+        # 방향 표시를 위한 범위 계산용
+        all_x, all_y, all_z = [], [], []
 
-        # 전역 중심: 모든 해마(라벨>0) 좌표의 평균 (z,y,x)
-        all_coords = np.argwhere(data > 0)
-        global_centroid = np.mean(all_coords, axis=0)  # (z,y,x)
-        # convert to xyz for subtraction: [x,y,z]
-        global_centroid_xyz = np.array([global_centroid[2], global_centroid[1], global_centroid[0]])
-        print(f">>> [DEBUG] global centroid (z,y,x)={global_centroid}, as xyz={global_centroid_xyz}")
-
-        def update_bounds(verts_xyz):
-            nonlocal overall_min, overall_max
-            if verts_xyz is None or len(verts_xyz) == 0:
-                return
-            vmin = np.min(verts_xyz, axis=0)
-            vmax = np.max(verts_xyz, axis=0)
-            overall_min = np.minimum(overall_min, vmin)
-            overall_max = np.maximum(overall_max, vmax)
-
-        def create_trace(label_id, color, name):
-            cnt = int(np.sum(data == label_id))
-            if cnt < 10:
-                print(f">>> [DEBUG] {name} voxel count too small: {cnt}")
-                return None
+        def create_trace(label_id, color, name, text_label):
+            if np.sum(data == label_id) < 10: return None
             m = (data == label_id).astype(np.uint8)
             try:
                 verts, faces, _, _ = measure.marching_cubes(m, 0.5, step_size=1)
-                # marching_cubes often returns coords as (z,y,x) -> convert to (x,y,z)
+                
+                # MRI(z,y,x) -> Plotly(x,y,z) 변환
                 verts_xyz = np.vstack([verts[:, 2], verts[:, 1], verts[:, 0]]).T
-                # subtract global centroid so left/right keep relative positions
-                verts_centered = verts_xyz - global_centroid_xyz
-                update_bounds(verts_centered)
+                
+                # 좌표 이동: (원래 좌표) - (통합 중심점)
+                verts_centered = verts_xyz - np.array([center[2], center[1], center[0]])
 
-                trace = go.Mesh3d(
+                # 범위 수집
+                all_x.extend(verts_centered[:, 0])
+                all_y.extend(verts_centered[:, 1])
+                all_z.extend(verts_centered[:, 2])
+
+                # 라벨 위치: 각 해마의 개별 중심점
+                label_positions[text_label] = {
+                    "x": np.mean(verts_centered[:, 0]),
+                    "y": np.mean(verts_centered[:, 1]),
+                    "z": np.mean(verts_centered[:, 2]),
+                    "color": color
+                }
+
+                return go.Mesh3d(
                     x=verts_centered[:, 0].tolist(),
                     y=verts_centered[:, 1].tolist(),
                     z=verts_centered[:, 2].tolist(),
@@ -552,62 +557,78 @@ async def get_plotly_3d(req: MaskRequest):
                     j=faces[:, 1].tolist(),
                     k=faces[:, 2].tolist(),
                     color=color,
-                    opacity=0.9,
+                    opacity=1.0,
                     name=name,
-                    flatshading=False,
-                    lighting=dict(ambient=0.6, diffuse=0.8, specular=0.2),
+                    flatshading=True, # 선명하게
+                    lighting=dict(ambient=0.7, diffuse=0.8, specular=0.2) # 밝게
                 )
-                print(f">>> [DEBUG] {name}: verts={len(verts_centered)}, faces={len(faces)}")
-                return trace
             except Exception as e:
-                print(f">>> [ERROR] 메쉬 생성 실패 ({name}): {e}")
+                print(f"메쉬 오류 ({name}): {e}")
                 return None
 
-        t1 = create_trace(1, '#27ae60', 'Left Hippocampus')
+        # 왼쪽(1)=초록, 오른쪽(2)=빨강
+        t1 = create_trace(1, '#27ae60', 'Left Hippocampus', "L")
         if t1: traces.append(t1)
-        t2 = create_trace(2, '#e74c3c', 'Right Hippocampus')
+        t2 = create_trace(2, '#e74c3c', 'Right Hippocampus', "R")
         if t2: traces.append(t2)
 
-        # compute ranges and padding
-        if np.isfinite(overall_min).all():
-            span = overall_max - overall_min
-            span[span == 0] = 1.0
-            padding = span * 0.15 + 1.0
-            x_range = [float(overall_min[0] - padding[0]), float(overall_max[0] + padding[0])]
-            y_range = [float(overall_min[1] - padding[1]), float(overall_max[1] + padding[1])]
-            z_range = [float(overall_min[2] - padding[2]), float(overall_max[2] + padding[2])]
-            center_xyz = ((overall_min + overall_max) / 2.0).tolist()
-            span_max = float(np.max(span))
-            print(f">>> [DEBUG] bounds min={overall_min}, max={overall_max}, center={center_xyz}, span_max={span_max}")
-        else:
-            x_range = [-100, 100]; y_range = [-100, 100]; z_range = [-100, 100]
-            center_xyz = [0, 0, 0]
-            span_max = 50.0
-            print(">>> [WARN] overall bounds invalid, using fallback ranges")
+        if not traces:
+            return JSONResponse({"status": "error", "message": "3D 모델 생성 실패"}, status_code=500)
 
         fig = go.Figure(data=traces)
+
+        # [2] 어노테이션 (라벨 + 방향)
+        annotations = []
+        
+        # L/R 라벨
+        for txt, pos in label_positions.items():
+            annotations.append(dict(
+                showarrow=False,
+                x=pos["x"], y=pos["y"], z=pos["z"] + 15, # 살짝 위로
+                text=txt,
+                font=dict(color=pos["color"], size=24, family="Arial Black"),
+                xanchor="center", yanchor="bottom"
+            ))
+
+        # x, y, z 방향 표시
+        padding = 20
+        if all_x:
+            max_x, max_y, max_z = max(all_x), max(all_y), max(all_z)
+            # X축 (Left-Right)
+            annotations.append(dict(showarrow=False, x=max_x + padding, y=0, z=0, text="x", font=dict(color="black", size=14)))
+            # Y축 (Anterior)
+            annotations.append(dict(showarrow=False, x=0, y=max_y + padding, z=0, text="y", font=dict(color="black", size=14)))
+            # Z축 (Superior)
+            annotations.append(dict(showarrow=False, x=0, y=0, z=max_z + padding, text="z", font=dict(color="black", size=14)))
+
+        # [3] 레이아웃 & 카메라 설정 (핵심)
+        axis_style = dict(
+            showgrid=False, zeroline=False, showbackground=False, showticklabels=False,
+            visible=False, showline=False
+        )
+
         fig.update_layout(
             scene=dict(
-                xaxis=dict(visible=True, range=x_range, title='X'),
-                yaxis=dict(visible=True, range=y_range, title='Y'),
-                zaxis=dict(visible=True, range=z_range, title='Z'),
+                xaxis=dict(**axis_style),
+                yaxis=dict(**axis_style),
+                zaxis=dict(**axis_style),
                 aspectmode='data',
-                bgcolor='white'    
+                bgcolor='white',
+                annotations=annotations,
+                
+                # ★ 카메라 설정 (scene 안에 넣어야 Home 버튼 기준이 됨)
+                camera=dict(
+                    # eye: (1.5, 1.5, 1.5)가 기본 대각선 쿼터뷰
+                    # y를 음수(-1.5)로 하면 시계방향으로 90도 회전된 위치
+                    eye=dict(x=1.5, y=-1.5, z=1.5),
+                    center=dict(x=0, y=0, z=0),
+                    up=dict(x=0, y=0, z=1)
+                )
             ),
             paper_bgcolor='white',
             margin=dict(l=0, r=0, b=0, t=0)
         )
 
-        # set camera to look at center, placed diagonally away proportional to span_max
-        eye_dist = max( span_max * 2.5, 50.0 )  # ensure not too close
-        cam = dict(
-            eye=dict(x=1.25, y=1.25, z=1.25),
-            center=dict(x=0, y=0, z=0),
-            up=dict(x=0, y=0, z=1)
-        )
-        fig.update_layout(scene_camera=cam)
-
-        print(f">>> [3D 완료 v3] trace 수: {len(traces)}, camera eye_dist={eye_dist}")
         return JSONResponse(content=json.loads(fig.to_json()))
 
     except Exception as e:

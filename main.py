@@ -3,6 +3,8 @@ from datetime import datetime
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+import os
 from pydantic import BaseModel
 from pathlib import Path
 import shutil
@@ -22,6 +24,7 @@ from skimage import measure
 from scipy.ndimage import binary_closing
 from skimage.filters import gaussian
 from nilearn.masking import compute_brain_mask
+from nilearn.image import resample_to_img
 
 app = FastAPI()
 
@@ -62,6 +65,10 @@ DCM2NIIX_BIN = "dcm2niix"
 # WSL / Conda 설정 (WSL의 기본 distro 사용)
 HIPPMAPP3R_ENV_NAME = "hippmapp3r"
 CONDA_INIT = "source ~/miniconda3/etc/profile.d/conda.sh"
+
+UPLOAD_DIR = Path("uploads")
+UPLOAD_DIR.mkdir(exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 # XGBoost 모델 로드
 xgb_model = xgb.XGBClassifier()
@@ -113,9 +120,8 @@ class ExamHistoryItem(BaseModel):
     created_at: str
 
 # 공통 함수
-def save_file_tmp(upload: UploadFile) -> Path:
-    tmp_dir = Path(tempfile.mkdtemp())
-    dest = tmp_dir / upload.filename
+def save_file_permanent(upload: UploadFile) -> Path:
+    dest = UPLOAD_DIR / upload.filename
     with dest.open("wb") as f:
         shutil.copyfileobj(upload.file, f)
     return dest
@@ -140,8 +146,9 @@ def dicom_to_nifti(zip_path: Path) -> Path:
 
 
 def win_to_wsl(path: Path | str) -> str:
-    p = Path(path)
-    drive = p.drive[0].lower()  # C:\ -> c
+    p = Path(path).resolve() 
+    
+    drive = p.drive[0].lower()
     rest = str(p).replace(p.drive, "").replace("\\", "/")
     return f"/mnt/{drive}{rest}"
 
@@ -401,11 +408,10 @@ async def process_mri(
     exam_datetime: str | None = Form(None)
 ):
     # 1. 파일 저장 및 변환
-    tmp = save_file_tmp(file)
-    if tmp.suffix.lower() == ".zip":
-        nii = dicom_to_nifti(tmp)
-    else:
-        nii = tmp
+    nii = save_file_permanent(file)
+    
+    if nii.suffix.lower() == ".zip":
+        nii = dicom_to_nifti(nii)
 
     # 2. exam datetime 처리
     if exam_datetime:
@@ -454,21 +460,34 @@ async def process_mri(
     # 7. 마스크 파일 처리
     mask_b64 = None
     import os
+    
     if pred.exists():
         try:
+            orig_img = nib.load(str(nii))
+            pred_img = nib.load(str(pred))
+
+            if orig_img.shape != pred_img.shape:
+                print(f"크기 불일치. 리샘플링 수행: {pred_img.shape} -> {orig_img.shape}")
+                
+                resampled_mask = resample_to_img(pred_img, orig_img, interpolation='nearest')
+
+                nib.save(resampled_mask, str(pred))
+                print("리샘플링 완료 및 저장됨.")
+
             size_bytes = os.path.getsize(pred)
             print(f">>> DEBUG: pred exists at {pred} size={size_bytes} bytes")
+            
             with open(pred, "rb") as f:
                 data_bytes = f.read()
-                print(f">>> DEBUG: read pred bytes: {len(data_bytes)}")
                 mask_b64 = base64.b64encode(data_bytes).decode('utf-8')
-                print(f">>> DEBUG: mask_base64 length: {len(mask_b64)}")
+                
         except Exception as e:
-            print(">>> ERROR reading pred file:", e)
+            print(">>> ERROR reading/resampling pred file:", e)
             mask_b64 = None
     else:
         print(">>> DEBUG: pred file does NOT exist:", pred)
         mask_b64 = None
+
 
     # 8. 결과 반환
     return JSONResponse(
@@ -484,6 +503,56 @@ async def process_mri(
     )
 
     
+@app.get("/api/exams/{exam_id}")
+def get_exam_detail(exam_id: int):
+    conn = pymysql.connect(**DB_CONFIG)
+    try:
+        with conn.cursor() as cur:
+            sql = """
+                SELECT * FROM mri_results 
+                WHERE exam_id = %s
+            """
+            cur.execute(sql, (exam_id,))
+            row = cur.fetchone()
+            
+            if not row:
+                return JSONResponse({"status": "error", "message": "데이터 없음"}, status_code=404)
+
+            feats = {
+                "icv": row['icv'],
+                "left_hipp_vol_mm3": row['left_hipp_vol'],
+                "right_hipp_vol_mm3": row['right_hipp_vol'],
+                "total_hipp_vol_mm3": row['total_hipp_vol'],
+                "APOE4": row['apoe4'],
+                "left_hipp_vol_icv_norm": None,
+                "right_hipp_vol_icv_norm": None,
+                "total_hipp_vol_icv_norm": None
+            }
+            
+            if row['icv'] and row['icv'] > 0:
+                scale = 1000.0 / row['icv']
+                feats["left_hipp_vol_icv_norm"] = round(row['left_hipp_vol'] * scale, 3)
+                feats["right_hipp_vol_icv_norm"] = round(row['right_hipp_vol'] * scale, 3)
+                feats["total_hipp_vol_icv_norm"] = round(row['total_hipp_vol'] * scale, 3)
+
+            probs = {"CN": row['prob_cn'], "AD": row['prob_ad']}
+            summary = make_summary(row['label'], probs, feats)
+
+            file_url = f"http://127.0.0.1:8000/uploads/{row['filename']}"
+
+            return {
+                "status": "success",
+                "data": {
+                    "file_url": file_url,
+                    "filename": row['filename'],
+                    "features": feats,
+                    "summary": summary,
+                    "label": row['label'],
+                    "probs": probs
+                }
+            }
+    finally:
+        conn.close()    
     
 
 @app.get("/api/patients/{patient_id}/history", response_model=List[ExamHistoryItem])

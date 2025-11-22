@@ -1,0 +1,14 @@
+{
+  "feature_cols": [
+    "left_hipp_vol_mm3",
+    "right_hipp_vol_mm3",
+    "total_hipp_vol_mm3",
+    "asymmetry_index",
+    "left_hipp_vol_icv_norm",
+    "right_hipp_vol_icv_norm",
+    "total_hipp_vol_icv_norm",
+    "AGE",
+    "APOE4",
+    "SEX_FEMALE"
+  ]
+}

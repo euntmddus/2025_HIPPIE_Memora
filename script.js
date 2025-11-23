@@ -1,10 +1,9 @@
-// script.js
-// 정리: DOM 참조 -> 유틸 -> 환자 로직 -> NIfTI 로드/파싱 -> 렌더링 -> 상호작용 -> 이벤트
-// 한 줄 설명 주석을 각 블록 및 함수에 추가했습니다.
+// js/script.js
 
 // ---------------------------------------------------------
 // 1) 전역 상태 및 DOM 요소 참조
 // ---------------------------------------------------------
+
 let currentViewMode = '2D';
 let patients = []; // DB에서 불러온 환자 목록
 let mri = [
@@ -14,8 +13,8 @@ let mri = [
 let idx = 0;
 let currentPatientIndex = 0;
 
-let maskData = null; // 2D 오버레이용 마스크
-let currentMaskBase64 = null; // 3D 렌더링용 base64
+let maskData = null; // 2D
+let currentMaskBase64 = null; // 3D
 
 // DOM 요소
 const list = document.getElementById('patientList');
@@ -36,27 +35,26 @@ const defaultImageTextEl = document.getElementById('defaultImageText');
 const viewerImgEl = document.getElementById('viewerImg');
 const mprContainerEl = document.getElementById('mprContainer');
 const viewer3DContainerEl = document.getElementById('viewer3DContainer');
-// NOTE: loadingText element is referenced in code but not present in index.html by default.
-// const loadingText = document.getElementById('loadingText');
-
 const axialPanel = document.getElementById('axialPanel');
 const sagittalPanel = document.getElementById('sagittalPanel');
 const coronalPanel = document.getElementById('coronalPanel');
-
-// optional brightness control element (may be absent)
 const brightnessEl = document.getElementById('brightness');
+
 
 // ---------------------------------------------------------
 // 2) 전역 NIfTI 상태
 // ---------------------------------------------------------
+
 let imageData = null;
 let dims = null;
 let brightness = 1.0;
 let currentSlice = { axial: 0, sagittal: 0, coronal: 0 };
 
+
 // ---------------------------------------------------------
 // 3) 유틸 함수
 // ---------------------------------------------------------
+
 function todayISO() {
   const t = new Date();
   return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
@@ -71,11 +69,13 @@ function log(msg, isError = false) {
   if (logList) logList.prepend(row);
 }
 
+
 // ---------------------------------------------------------
 // 4) 환자 데이터 로직 (로드/렌더/선택/이력 호출)
 // ---------------------------------------------------------
+
+// 서버에서 환자 목록을 가져와 내부 구조로 변환
 async function loadPatients() {
-  "서버에서 환자 목록을 가져와 내부 구조로 변환"
   try {
     const res = await fetch('http://127.0.0.1:8000/api/patients');
     if (!res.ok) throw new Error('환자 목록 로드 실패');
@@ -108,8 +108,8 @@ async function loadPatients() {
   }
 }
 
+// 환자 목록 DOM 렌더링 및 기본 선택
 function renderPatients() {
-  "환자 목록 DOM 렌더링 및 기본 선택"
   if (!list) return;
   list.innerHTML = '';
   patients.forEach((p, i) => {
@@ -121,8 +121,8 @@ function renderPatients() {
   });
 }
 
+// 환자 선택 시 화면 업데이트
 function selectPatient(i, li) {
-  "환자 선택 시 화면 업데이트"
   document.querySelectorAll('.patient-list li').forEach(n => n.classList.remove('active'));
   if (li) li.classList.add('active');
 
@@ -132,13 +132,13 @@ function selectPatient(i, li) {
   if (ptSexAgeEl) ptSexAgeEl.textContent = `${p.sex} / ${p.age}세`;
   renderVitals(p.vitals);
   renderFeatures(p.features);
-  if (summaryEl) summaryEl.value = p.summary || '';
+  if (summaryEl) summaryEl.textContent = p.summary || '';
   loadPatientHistory(p.id);
   renderViewer();
 }
 
+// 환자 검사 이력 로드
 async function loadPatientHistory(patientId) {
-  "환자 검사 이력 로드"
   const historyList = document.getElementById('historyList');
   if (!historyList) return;
   historyList.innerHTML = '<li style="justify-content: center; color: #888;">로딩 중...</li>';
@@ -154,8 +154,8 @@ async function loadPatientHistory(patientId) {
   }
 }
 
+// 이력 DOM 렌더링
 function renderHistory(historyData) {
-  "이력 DOM 렌더링"
   const historyList = document.getElementById('historyList');
   if (!historyList) return;
   historyList.innerHTML = '';
@@ -188,8 +188,8 @@ function renderHistory(historyData) {
   });
 }
 
+// 신체 정보(키/몸무게) render
 function renderVitals(text) {
-  "신체 정보(키/몸무게) 렌더"
   const root = document.getElementById('ptVitals');
   if (!root) return;
   const items = (text || '').split('|').map(s => s.trim()).filter(Boolean);
@@ -203,8 +203,8 @@ function renderVitals(text) {
   });
 }
 
+// 분석 특성 목록 render
 function renderFeatures(features) {
-  "분석 특성(부피 등) 목록 렌더"
   if (!featureListEl) return;
   featureListEl.innerHTML = '';
   if (!features) return;
@@ -231,11 +231,13 @@ function renderFeatures(features) {
   });
 }
 
+
 // ---------------------------------------------------------
 // 5) 뷰어 렌더링 / NIfTI 로드
 // ---------------------------------------------------------
+
+// 2D/3D 버튼에 따라 뷰어 전환
 function renderViewer() {
-  "현재 선택된 MRI 항목에 따라 2D/3D 뷰 전환"
   const currentMri = mri[idx];
   const hasImage = currentMri && currentMri.src;
 
@@ -279,23 +281,18 @@ function renderViewer() {
         });
       }
     }
-  } else {
-    // 3D 모드: 버튼 클릭 시 별도로 로드
-  }
+  } 
 }
 
+// File 객체를 Blob URL로 변환하여 로드
 async function loadNiftiFile(file) {
-  "File 객체를 Blob URL로 변환하여 로드"
   const url = URL.createObjectURL(file);
   await loadNiftiFromURL(url);
 }
 
+// URL에서 NIfTI 데이터를 불러와 파싱
 async function loadNiftiFromURL(url) {
-  "URL에서 NIfTI(또는 gzip) 데이터를 불러와 파싱"
   try {
-    // optional loadingText handling if present
-    // if (loadingText) { loadingText.style.display = 'block'; loadingText.textContent = 'NIfTI 로딩 중…'; }
-
     const res = await fetch(url);
     const raw = new Uint8Array(await res.arrayBuffer());
 
@@ -316,19 +313,19 @@ async function loadNiftiFromURL(url) {
     };
 
     renderAll();
-    // if (loadingText) loadingText.style.display = 'none';
     console.log('NIfTI 로드 완료:', dims);
   } catch (err) {
     console.error(err);
-    // if (loadingText) loadingText.textContent = '로드 실패';
   }
 }
+
 
 // ---------------------------------------------------------
 // 6) 상호작용: 패널 드래그/휠 등
 // ---------------------------------------------------------
+
+// 캔버스 클릭 드래그로 슬라이스 변경
 function setupInteraction() {
-  "캔버스 클릭 드래그로 슬라이스 변경"
   let isDragging = false;
   const panels = [
     { id: 'axialCanvas', view: 'axial' },
@@ -367,12 +364,15 @@ function setupInteraction() {
   });
 }
 
+
 // ---------------------------------------------------------
-// 7) 3D 뷰어: Plotly 요청/렌더링
+// 7) 3D 뷰어
 // ---------------------------------------------------------
+
+// 서버에 base64 마스크를 보내 Plotly JSON을 받아 렌더링
 async function loadAndRenderPlotly(maskBase64) {
-  "서버에 base64 마스크를 보내 Plotly JSON을 받아 렌더링"
   const container = document.getElementById('viewer3DContainer');
+  if(container) container.innerHTML = '';
   const mprContainer = document.getElementById('mprContainer');
   if (!maskBase64) {
     alert("분석된 데이터가 없습니다.");
@@ -427,9 +427,11 @@ async function loadAndRenderPlotly(maskBase64) {
   }
 }
 
+
 // ---------------------------------------------------------
 // 8) 이벤트 리스너 (업로드/뷰 전환 등)
 // ---------------------------------------------------------
+
 if (btnView2D) btnView2D.onclick = () => {
   currentViewMode = '2D';
   if (mprContainerEl) mprContainerEl.style.display = 'block';
@@ -441,7 +443,7 @@ if (btnView3D) btnView3D.onclick = () => {
   currentViewMode = '3D';
   let dataToRender = window.latest_mask_base64 || currentMaskBase64;
   if (!dataToRender) {
-    alert('분석된 데이터가 아직 없습니다. 먼저 분석을 실행해주세요.');
+    alert('분석된 데이터가 아직 없습니다.');
     return;
   }
   loadAndRenderPlotly(dataToRender);
@@ -479,7 +481,6 @@ if (fileInput) {
     const p = patients[currentPatientIndex];
 
     try {
-      // if (loadingText) { loadingText.style.display = 'block'; loadingText.textContent = "분석 중..."; }
       if (btnUpload) btnUpload.disabled = true;
 
       const fd = new FormData();
@@ -534,16 +535,17 @@ if (fileInput) {
       alert("분석 중 오류가 발생했습니다.");
     } finally {
       if (btnUpload) btnUpload.disabled = false;
-      // if (loadingText) loadingText.style.display = 'none';
     }
   };
 }
 
+
 // ---------------------------------------------------------
 // 9) Base64 마스크 처리 및 NIfTI 파싱/렌더링
 // ---------------------------------------------------------
+
+// 서버에서 받은 base64 마스크를 파싱해 maskData에 적용
 async function loadMaskFromBase64(base64String) {
-  "서버에서 받은 base64 마스크를 파싱해 maskData에 적용"
   try {
     const binaryString = window.atob(base64String);
     const len = binaryString.length;
@@ -583,11 +585,11 @@ async function loadMaskFromBase64(base64String) {
   }
 }
 
+// 서버 결과를 UI에 적용
 function applyServerResult(result) {
-  "서버 결과를 UI에 적용"
   const { probs, label, summary, features } = result;
   if (summaryEl && summary) {
-    summaryEl.value = summary;
+      summaryEl.textContent = summary;
     if (patients[currentPatientIndex]) {
       patients[currentPatientIndex].summary = summary;
     }
@@ -595,7 +597,7 @@ function applyServerResult(result) {
     const CN = Math.round(probs.CN || 0);
     const AD = Math.round(probs.AD || 0);
     const text = `모델 예측: ${label}\n\n확률 분포: CN ${CN}% · AD ${AD}%`;
-    summaryEl.value = text;
+    summaryEl.textContent = text;
     if (patients[currentPatientIndex]) {
       patients[currentPatientIndex].summary = text;
     }
@@ -607,11 +609,12 @@ function applyServerResult(result) {
   }
 }
 
+
 // ---------------------------------------------------------
-// 10) NIfTI 파싱 및 렌더링 함수 (핵심)
+// 10) NIfTI 파싱 및 렌더링 함수
 // ---------------------------------------------------------
+
 function parseNiftiHeader(buf) {
-  "NIfTI 헤더에서 dim/datatype/bitpix/vox_offset 추출"
   const v = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
   return {
     dim: [v.getInt16(40, true), v.getInt16(42, true), v.getInt16(44, true), v.getInt16(46, true)],
@@ -621,8 +624,8 @@ function parseNiftiHeader(buf) {
   };
 }
 
+// 원시 버퍼에서 이미지 볼륨을 추출하여 Float32Array로 반환
 function extractImageData(buf, offset, header, isMask = false) {
-  "원시 버퍼에서 이미지 볼륨을 추출하여 Float32Array로 반환"
   const v = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
   const n = header.dim[1] * header.dim[2] * header.dim[3];
   const data = new Float32Array(n);
@@ -656,15 +659,15 @@ function extractImageData(buf, offset, header, isMask = false) {
   return data;
 }
 
+// 세 방향 다 render
 function renderAll() {
-  "세 방향 모두 렌더"
   renderAxial();
   renderSagittal();
   renderCoronal();
 }
 
+// Axial
 function renderAxial() {
-  "Axial 뷰 렌더링 및 마스크 오버레이"
   if (!dims || !imageData) return;
   const c = document.getElementById('axialCanvas');
   if (!c) return;
@@ -702,8 +705,8 @@ function renderAxial() {
   if (infoEl) infoEl.textContent = `${z + 1} / ${dims[2]}`;
 }
 
+// Sagittal
 function renderSagittal() {
-  "Sagittal 뷰 렌더링"
   if (!dims || !imageData) return;
   const c = document.getElementById('sagittalCanvas');
   if (!c) return;
@@ -741,8 +744,8 @@ function renderSagittal() {
   if (infoEl) infoEl.textContent = `${x + 1} / ${dims[0]}`;
 }
 
+// Coronal
 function renderCoronal() {
-  "Coronal 뷰 렌더링"
   if (!dims || !imageData) return;
   const c = document.getElementById('coronalCanvas');
   if (!c) return;
@@ -780,8 +783,8 @@ function renderCoronal() {
   if (infoEl) infoEl.textContent = `${y + 1} / ${dims[1]}`;
 }
 
+// 십자선
 function drawCrosshair(ctx, width, height, x, y) {
-  "십자선(크로스헤어) 그리기"
   ctx.beginPath();
   ctx.setLineDash([8, 3]);
   ctx.strokeStyle = "#9ab3fd";
@@ -796,7 +799,6 @@ function drawCrosshair(ctx, width, height, x, y) {
   ctx.resetTransform();
 }
 
-// brightness 컨트롤이 있는 경우 이벤트 바인딩
 if (brightnessEl) {
   brightnessEl.addEventListener('input', (e) => {
     brightness = parseFloat(e.target.value);
@@ -806,7 +808,7 @@ if (brightnessEl) {
   });
 }
 
-// 휠 이벤트 바인딩
+// 휠 조작
 if (axialPanel) {
   axialPanel.addEventListener('wheel', (e) => {
     if (!imageData) return;
@@ -835,9 +837,11 @@ if (coronalPanel) {
   });
 }
 
+
 // ---------------------------------------------------------
 // 초기화
 // ---------------------------------------------------------
+
 async function init() {
   if (issuedAtEl) issuedAtEl.textContent = todayISO();
   await loadPatients();

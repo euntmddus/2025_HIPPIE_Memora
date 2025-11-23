@@ -23,8 +23,6 @@ import json
 import plotly.graph_objects as go
 from skimage import measure
 from scipy.ndimage import gaussian_filter
-# from scipy.ndimage import binary_closing      # currently unused -> commented
-# from skimage.filters import gaussian           # currently unused -> commented
 from nilearn.masking import compute_brain_mask
 from nilearn.image import resample_to_img
 
@@ -606,11 +604,10 @@ def get_patient_history(patient_id: str):
     finally:
         conn.close()
 
+# 3D 뷰어
 @app.post("/api/get_plotly_3d")
 async def get_plotly_3d(req: MaskRequest):
-    "mask_base64를 받아 Plotly 3D mesh JSON을 생성하여 반환"
     try:
-        print(">>> [3D 최종] 홈 버튼 고정 + 카메라 90도 회전 + 라벨/축 표시 + 고화질 렌더링")
         import base64, gzip
         decoded = base64.b64decode(req.mask_base64)
         if decoded[:2] == b'\x1f\x8b':
@@ -624,6 +621,7 @@ async def get_plotly_3d(req: MaskRequest):
         data = np.round(img.get_fdata()).astype(int)
         Path(tmp_path).unlink()
 
+        # 데이터 확인
         if np.sum(data > 0) < 10:
             return JSONResponse({"status": "error", "message": "해마 데이터가 없습니다."}, status_code=400)
 
@@ -635,26 +633,32 @@ async def get_plotly_3d(req: MaskRequest):
 
         traces = []
         label_positions = {}
-        all_x, all_y, all_z = [], [], []
 
+        all_x, all_y, all_z = [], [], []
+        
         def create_trace(label_id, color, name, text_label):
-            "label_id에 해당하는 볼륨을 추출하여 Mesh3d trace 생성"
             if np.sum(data == label_id) < 10: return None
+            
             m = (data == label_id).astype(float)
             m_smooth = gaussian_filter(m, sigma=0.5) # 값이 클 수록 매끈매끈
+            
             try:
                 verts, faces, _, _ = measure.marching_cubes(m_smooth, level=0.5, step_size=1)
                 verts_xyz = np.vstack([verts[:, 2], verts[:, 1], verts[:, 0]]).T
                 verts_centered = verts_xyz - np.array([center[2], center[1], center[0]])
+
                 all_x.extend(verts_centered[:, 0])
                 all_y.extend(verts_centered[:, 1])
                 all_z.extend(verts_centered[:, 2])
+
+                # 라벨 위치
                 label_positions[text_label] = {
                     "x": np.mean(verts_centered[:, 0]),
                     "y": np.mean(verts_centered[:, 1]),
                     "z": np.mean(verts_centered[:, 2]),
                     "color": color
                 }
+
                 return go.Mesh3d(
                     x=verts_centered[:, 0].tolist(),
                     y=verts_centered[:, 1].tolist(),
@@ -665,14 +669,21 @@ async def get_plotly_3d(req: MaskRequest):
                     color=color,
                     opacity=1.0,
                     name=name,
-                    flatshading=False,
-                    lighting=dict(ambient=0.5, diffuse=0.8, roughness=0.7, specular=0.1, fresnel=0.5),
+                    flatshading=False, 
+                    lighting=dict(
+                        ambient=0.5,
+                        diffuse=0.8,
+                        roughness=0.7,
+                        specular=0.1,
+                        fresnel=0.5  
+                    ),
                     lightposition=dict(x=1000, y=1000, z=5000)
                 )
             except Exception as e:
                 print(f"메쉬 오류 ({name}): {e}")
                 return None
 
+        # 왼쪽(1)=초록, 오른쪽(2)=빨강
         t1 = create_trace(1, '#27ae60', 'Left Hippocampus', "L")
         if t1: traces.append(t1)
         t2 = create_trace(2, '#e74c3c', 'Right Hippocampus', "R")
@@ -684,6 +695,8 @@ async def get_plotly_3d(req: MaskRequest):
         fig = go.Figure(data=traces)
 
         annotations = []
+        
+        # L/R 라벨
         for txt, pos in label_positions.items():
             annotations.append(dict(
                 showarrow=False,
@@ -693,11 +706,15 @@ async def get_plotly_3d(req: MaskRequest):
                 xanchor="center", yanchor="bottom"
             ))
 
+        # x, y, z 방향 표시
         padding = 20
         if all_x:
             max_x, max_y, max_z = max(all_x), max(all_y), max(all_z)
+            # X축
             annotations.append(dict(showarrow=False, x=max_x + padding, y=0, z=0, text="x", font=dict(color="black", size=14)))
+            # Y축
             annotations.append(dict(showarrow=False, x=0, y=max_y + padding, z=0, text="y", font=dict(color="black", size=14)))
+            # Z축
             annotations.append(dict(showarrow=False, x=0, y=0, z=max_z + padding, text="z", font=dict(color="black", size=14)))
 
         axis_style = dict(
@@ -713,6 +730,8 @@ async def get_plotly_3d(req: MaskRequest):
                 aspectmode='data',
                 bgcolor='white',
                 annotations=annotations,
+                
+                # 카메라 설정
                 camera=dict(
                     eye=dict(x=1.5, y=-1.5, z=1.5),
                     center=dict(x=0, y=0, z=0),
@@ -729,15 +748,3 @@ async def get_plotly_3d(req: MaskRequest):
         import traceback
         traceback.print_exc()
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
-
-# ------------------------------
-# 함수 순서 요약 (읽기 편한 흐름)
-# 1) 설정/상수
-# 2) 파일/변환 유틸(save_file_permanent, dicom_to_nifti, win_to_wsl)
-# 3) segmentation 실행(run_hippmapp3r) 및 마스크 후처리(split_left_right, largest_cc)
-# 4) ICV 계산(calculate_icv_nilearn)
-# 5) 특성 계산(compute_features)
-# 6) 모델 관련(build_vec, infer, make_summary)
-# 7) DB 관련(save_exam, save_db)
-# 8) API 엔드포인트 (/api/process_mri 등)
-# ------------------------------

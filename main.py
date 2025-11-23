@@ -466,13 +466,16 @@ async def process_mri(
             orig_img = nib.load(str(nii))
             pred_img = nib.load(str(pred))
 
-            if orig_img.shape != pred_img.shape:
-                print(f"크기 불일치. 리샘플링 수행: {pred_img.shape} -> {orig_img.shape}")
-                
-                resampled_mask = resample_to_img(pred_img, orig_img, interpolation='nearest')
+            # Shape이 같더라도 Affine(방향)이 다를 수 있으므로 무조건 원본 기준으로 리샘플링 수행
+            print(f"Mask 정합성 확보를 위한 리샘플링 수행...")
+            
+            # interpolation='nearest'는 마스크(0,1,2) 값이 소수점이 되지 않게 유지함
+            resampled_mask = resample_to_img(pred_img, orig_img, interpolation='nearest')
+            
+            nib.save(resampled_mask, str(pred))
+            print("리샘플링 및 덮어쓰기 완료.")
 
-                nib.save(resampled_mask, str(pred))
-                print("리샘플링 완료 및 저장됨.")
+            size_bytes = os.path.getsize(pred)
 
             size_bytes = os.path.getsize(pred)
             print(f">>> DEBUG: pred exists at {pred} size={size_bytes} bytes")

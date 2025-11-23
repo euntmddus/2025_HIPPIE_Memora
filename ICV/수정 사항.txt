@@ -1,0 +1,49 @@
+- main.py 수정 사항
+
+1. from nilearn.masking import compute_brain_mask →맨 위에 추가 했음
+
+2. 코드 추가 
+def calculate_icv_nilearn(nifti_path: Path) -> float:
+    """
+    Nilearn을 사용하여  ICV(mm3)를 계산
+    """
+    try:
+        print(f" Nilearn ICV 계산 시작: {nifti_path}")
+        img = nib.load(str(nifti_path))
+        
+        # 뇌 마스크 생성
+        mask_img = compute_brain_mask(img, threshold=0.5, connected=True)
+        
+        # 부피 계산
+        mask_data = mask_img.get_fdata()
+        voxel_count = np.sum(mask_data > 0)
+        
+        header = img.header
+        zooms = header.get_zooms()
+        one_voxel_vol = zooms[0] * zooms[1] * zooms[2]
+        
+        icv_mm3 = voxel_count * one_voxel_vol
+        print(f" ICV 계산 완료: {icv_mm3:.2f} mm³")
+        return float(icv_mm3)
+
+    except Exception as e:
+        print(f" ICV 계산 실패: {e}")
+        return 0.0
+
+3. process_mri API 로직 추가
+# 2. ★★★ [중요] dt_obj 정의 부분 ★★★ ← 여기 아래쪽에 추가 함
+    final_icv = icv 
+
+    #  Nilearn으로 계산
+    if final_icv is None or final_icv == 0:
+        print(" ICV 정보가 없어 자동 계산을 시작합니다...")
+        calculated_icv = calculate_icv_nilearn(nii)
+        
+        if calculated_icv > 0:
+            final_icv = calculated_icv
+        else:
+            final_icv = 0.0
+    
+    print(f" ICV: {final_icv}")
+
+    feats = compute_features(left, right, final_icv) -> icv 추출

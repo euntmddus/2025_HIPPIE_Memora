@@ -1,23 +1,23 @@
+// script.js
+// 정리: DOM 참조 -> 유틸 -> 환자 로직 -> NIfTI 로드/파싱 -> 렌더링 -> 상호작용 -> 이벤트
+// 한 줄 설명 주석을 각 블록 및 함수에 추가했습니다.
+
+// ---------------------------------------------------------
+// 1) 전역 상태 및 DOM 요소 참조
+// ---------------------------------------------------------
 let currentViewMode = '2D';
-
-// DB에서 불러올 환자 배열
-let patients = [];
-
-// 기본 MRI 이미지
+let patients = []; // DB에서 불러온 환자 목록
 let mri = [
   { src: 'assets/mri-axial.png', title: 'Axial', type: "PNG" },
   { src: 'assets/mri-coronal.png', title: 'Coronal', type: "PNG" }
 ];
-
 let idx = 0;
 let currentPatientIndex = 0;
 
-let maskData = null; // 해마 마스크 데이터 (2D용)
-let currentMaskBase64 = null; // ★ 3D용 데이터 (Base64)
+let maskData = null; // 2D 오버레이용 마스크
+let currentMaskBase64 = null; // 3D 렌더링용 base64
 
-// ---------------------------------------------------------
-// 1. DOM 요소 참조
-// ---------------------------------------------------------
+// DOM 요소
 const list = document.getElementById('patientList');
 const ptNameEl = document.getElementById('ptName');
 const ptSexAgeEl = document.getElementById('ptSexAge');
@@ -27,39 +27,35 @@ const summaryEl = document.getElementById('summaryBox');
 const logList = document.getElementById('logList');
 const featureListEl = document.getElementById('featureList');
 
-// 버튼들
 const btnView2D = document.getElementById('btnView2D');
 const btnView3D = document.getElementById('btnView3D');
 const btnUpload = document.getElementById('btnUpload');
 const fileInput = document.getElementById('fileInput');
 
-// 뷰어 관련 요소
 const defaultImageTextEl = document.getElementById('defaultImageText');
 const viewerImgEl = document.getElementById('viewerImg');
 const mprContainerEl = document.getElementById('mprContainer');
 const viewer3DContainerEl = document.getElementById('viewer3DContainer');
-const loadingText = document.getElementById('loadingText');
+// NOTE: loadingText element is referenced in code but not present in index.html by default.
+// const loadingText = document.getElementById('loadingText');
 
-// 2D 뷰어 패널
 const axialPanel = document.getElementById('axialPanel');
 const sagittalPanel = document.getElementById('sagittalPanel');
 const coronalPanel = document.getElementById('coronalPanel');
 
-// 밝기 조절
+// optional brightness control element (may be absent)
 const brightnessEl = document.getElementById('brightness');
 
-
 // ---------------------------------------------------------
-// 2. 전역 변수 (NIfTI 데이터용)
+// 2) 전역 NIfTI 상태
 // ---------------------------------------------------------
 let imageData = null;
 let dims = null;
 let brightness = 1.0;
 let currentSlice = { axial: 0, sagittal: 0, coronal: 0 };
 
-
 // ---------------------------------------------------------
-// 3. 유틸리티 함수
+// 3) 유틸 함수
 // ---------------------------------------------------------
 function todayISO() {
   const t = new Date();
@@ -75,32 +71,29 @@ function log(msg, isError = false) {
   if (logList) logList.prepend(row);
 }
 
-
 // ---------------------------------------------------------
-// 4. 환자 데이터 로직
+// 4) 환자 데이터 로직 (로드/렌더/선택/이력 호출)
 // ---------------------------------------------------------
 async function loadPatients() {
+  "서버에서 환자 목록을 가져와 내부 구조로 변환"
   try {
     const res = await fetch('http://127.0.0.1:8000/api/patients');
     if (!res.ok) throw new Error('환자 목록 로드 실패');
     const data = await res.json();
 
     patients = data.map(row => {
-      // [수정] 신체 정보 문자열 생성 로직 추가
       let vitalsStr = '';
       const parts = [];
       if (row.height_cm) parts.push(`키 ${row.height_cm}cm`);
       if (row.weight_kg) parts.push(`몸무게 ${row.weight_kg}kg`);
-
       vitalsStr = parts.join(' | ');
-
 
       return {
         id: row.patient_id,
         name: row.name,
         sex: row.sex,
         age: row.age,
-        vitals: vitalsStr, // [수정] 빈 문자열('') 대신 생성한 문자열 연결
+        vitals: vitalsStr,
         icv: row.icv,
         apoe4: row.apoe4,
         features: null,
@@ -115,7 +108,88 @@ async function loadPatients() {
   }
 }
 
+function renderPatients() {
+  "환자 목록 DOM 렌더링 및 기본 선택"
+  if (!list) return;
+  list.innerHTML = '';
+  patients.forEach((p, i) => {
+    const li = document.createElement('li');
+    li.innerHTML = `<span>•</span><span>${p.name}</span><span class="mono">${p.sex}/${p.age}</span>`;
+    li.onclick = () => selectPatient(i, li);
+    list.appendChild(li);
+    if (i === 0) selectPatient(0, li);
+  });
+}
+
+function selectPatient(i, li) {
+  "환자 선택 시 화면 업데이트"
+  document.querySelectorAll('.patient-list li').forEach(n => n.classList.remove('active'));
+  if (li) li.classList.add('active');
+
+  currentPatientIndex = i;
+  const p = patients[i];
+  if (ptNameEl) ptNameEl.textContent = p.name;
+  if (ptSexAgeEl) ptSexAgeEl.textContent = `${p.sex} / ${p.age}세`;
+  renderVitals(p.vitals);
+  renderFeatures(p.features);
+  if (summaryEl) summaryEl.value = p.summary || '';
+  loadPatientHistory(p.id);
+  renderViewer();
+}
+
+async function loadPatientHistory(patientId) {
+  "환자 검사 이력 로드"
+  const historyList = document.getElementById('historyList');
+  if (!historyList) return;
+  historyList.innerHTML = '<li style="justify-content: center; color: #888;">로딩 중...</li>';
+
+  try {
+    const res = await fetch(`http://127.0.0.1:8000/api/patients/${patientId}/history`);
+    if (!res.ok) throw new Error('History fetch failed');
+    const historyData = await res.json();
+    renderHistory(historyData);
+  } catch (err) {
+    console.error(err);
+    historyList.innerHTML = '<li style="justify-content: center; color: red;">이력 로드 실패</li>';
+  }
+}
+
+function renderHistory(historyData) {
+  "이력 DOM 렌더링"
+  const historyList = document.getElementById('historyList');
+  if (!historyList) return;
+  historyList.innerHTML = '';
+
+  if (historyData.length === 0) {
+    historyList.innerHTML = '<li style="justify-content: center; color: #888;">이전 검사 기록이 없습니다.</li>';
+    return;
+  }
+
+  historyData.forEach(item => {
+    const li = document.createElement('li');
+    li.style.display = 'flex';
+    li.style.flexDirection = 'column';
+    li.style.alignItems = 'flex-start';
+    li.style.gap = '2px';
+    li.style.borderBottom = '1px solid #eee';
+    li.style.padding = '8px';
+    const dateStr = item.exam_datetime.substring(0, 16);
+    const labelColor = item.label === 'CN' ? '#167c3a' : '#c43d35';
+    li.innerHTML = `
+            <div style="display: flex; justify-content: space-between; width: 100%;">
+                <span style="font-weight: bold; font-size: 12px;">${dateStr}</span>
+                <span style="color: ${labelColor}; font-weight: bold; font-size: 11px; background: #fff; border: 1px solid ${labelColor}; padding: 1px 4px; border-radius: 3px;">${item.label}</span>
+            </div>
+            <div style="font-size: 11px; color: #555;">
+                총 해마 부피: ${item.total_hipp_vol.toLocaleString()} mm³
+            </div>
+        `;
+    historyList.appendChild(li);
+  });
+}
+
 function renderVitals(text) {
+  "신체 정보(키/몸무게) 렌더"
   const root = document.getElementById('ptVitals');
   if (!root) return;
   const items = (text || '').split('|').map(s => s.trim()).filter(Boolean);
@@ -130,6 +204,7 @@ function renderVitals(text) {
 }
 
 function renderFeatures(features) {
+  "분석 특성(부피 등) 목록 렌더"
   if (!featureListEl) return;
   featureListEl.innerHTML = '';
   if (!features) return;
@@ -156,95 +231,11 @@ function renderFeatures(features) {
   });
 }
 
-function renderPatients() {
-  if (!list) return;
-  list.innerHTML = '';
-  patients.forEach((p, i) => {
-    const li = document.createElement('li');
-    li.innerHTML = `<span>•</span><span>${p.name}</span><span class="mono">${p.sex}/${p.age}</span>`;
-    li.onclick = () => selectPatient(i, li);
-    list.appendChild(li);
-    if (i === 0) selectPatient(0, li);
-  });
-}
-
-function selectPatient(i, li) {
-  document.querySelectorAll('.patient-list li').forEach(n => n.classList.remove('active'));
-  if (li) li.classList.add('active');
-
-  currentPatientIndex = i;
-  const p = patients[i];
-  if (ptNameEl) ptNameEl.textContent = p.name;
-  if (ptSexAgeEl) ptSexAgeEl.textContent = `${p.sex} / ${p.age}세`;
-  renderVitals(p.vitals);
-  renderFeatures(p.features);
-
-  if (summaryEl) {
-    summaryEl.value = p.summary || '';
-  }
-
-  loadPatientHistory(p.id);
-  renderViewer();
-}
-
-async function loadPatientHistory(patientId) {
-  const historyList = document.getElementById('historyList');
-  if (!historyList) return;
-
-  historyList.innerHTML = '<li style="justify-content: center; color: #888;">로딩 중...</li>';
-
-  try {
-    const res = await fetch(`http://127.0.0.1:8000/api/patients/${patientId}/history`);
-    if (!res.ok) throw new Error('History fetch failed');
-
-    const historyData = await res.json();
-    renderHistory(historyData);
-  } catch (err) {
-    console.error(err);
-    historyList.innerHTML = '<li style="justify-content: center; color: red;">이력 로드 실패</li>';
-  }
-}
-
-function renderHistory(historyData) {
-  const historyList = document.getElementById('historyList');
-  if (!historyList) return;
-
-  historyList.innerHTML = ''; // 초기화
-
-  if (historyData.length === 0) {
-    historyList.innerHTML = '<li style="justify-content: center; color: #888;">이전 검사 기록이 없습니다.</li>';
-    return;
-  }
-
-  historyData.forEach(item => {
-    const li = document.createElement('li');
-    li.style.display = 'flex';
-    li.style.flexDirection = 'column';
-    li.style.alignItems = 'flex-start';
-    li.style.gap = '2px';
-    li.style.borderBottom = '1px solid #eee';
-    li.style.padding = '8px';
-
-    const dateStr = item.exam_datetime.substring(0, 16);
-    const labelColor = item.label === 'CN' ? '#167c3a' : '#c43d35';
-
-    li.innerHTML = `
-            <div style="display: flex; justify-content: space-between; width: 100%;">
-                <span style="font-weight: bold; font-size: 12px;">${dateStr}</span>
-                <span style="color: ${labelColor}; font-weight: bold; font-size: 11px; background: #fff; border: 1px solid ${labelColor}; padding: 1px 4px; border-radius: 3px;">${item.label}</span>
-            </div>
-            <div style="font-size: 11px; color: #555;">
-                총 해마 부피: ${item.total_hipp_vol.toLocaleString()} mm³
-            </div>
-        `;
-    historyList.appendChild(li);
-  });
-}
-
 // ---------------------------------------------------------
-// 5. 뷰어 렌더링 로직
+// 5) 뷰어 렌더링 / NIfTI 로드
 // ---------------------------------------------------------
 function renderViewer() {
+  "현재 선택된 MRI 항목에 따라 2D/3D 뷰 전환"
   const currentMri = mri[idx];
   const hasImage = currentMri && currentMri.src;
 
@@ -289,22 +280,21 @@ function renderViewer() {
       }
     }
   } else {
-    // 3D 모드일 때 (여기서는 아무것도 안함, 버튼 클릭 시 처리됨)
+    // 3D 모드: 버튼 클릭 시 별도로 로드
   }
 }
 
 async function loadNiftiFile(file) {
+  "File 객체를 Blob URL로 변환하여 로드"
   const url = URL.createObjectURL(file);
   await loadNiftiFromURL(url);
 }
 
-// 2D 뷰어 - NIfTI 로드 (메인 로직)
 async function loadNiftiFromURL(url) {
+  "URL에서 NIfTI(또는 gzip) 데이터를 불러와 파싱"
   try {
-    if (loadingText) {
-      loadingText.style.display = 'block';
-      loadingText.textContent = 'NIfTI 로딩 중…';
-    }
+    // optional loadingText handling if present
+    // if (loadingText) { loadingText.style.display = 'block'; loadingText.textContent = 'NIfTI 로딩 중…'; }
 
     const res = await fetch(url);
     const raw = new Uint8Array(await res.arrayBuffer());
@@ -326,18 +316,20 @@ async function loadNiftiFromURL(url) {
     };
 
     renderAll();
-    if (loadingText) loadingText.style.display = 'none';
+    // if (loadingText) loadingText.style.display = 'none';
     console.log('NIfTI 로드 완료:', dims);
-
   } catch (err) {
     console.error(err);
-    if (loadingText) loadingText.textContent = '로드 실패';
+    // if (loadingText) loadingText.textContent = '로드 실패';
   }
 }
 
+// ---------------------------------------------------------
+// 6) 상호작용: 패널 드래그/휠 등
+// ---------------------------------------------------------
 function setupInteraction() {
+  "캔버스 클릭 드래그로 슬라이스 변경"
   let isDragging = false;
-
   const panels = [
     { id: 'axialCanvas', view: 'axial' },
     { id: 'sagittalCanvas', view: 'sagittal' },
@@ -350,11 +342,9 @@ function setupInteraction() {
 
     const updateSlice = (e) => {
       if (!dims) return;
-
       const rect = canvas.getBoundingClientRect();
       const x = Math.floor((e.clientX - rect.left) * (canvas.width / rect.width));
       const y = Math.floor((e.clientY - rect.top) * (canvas.height / rect.height));
-
       if (x < 0 || x >= canvas.width || y < 0 || y >= canvas.height) return;
 
       if (p.view === 'axial') {
@@ -377,26 +367,21 @@ function setupInteraction() {
   });
 }
 
-
-// 3D 뷰어
+// ---------------------------------------------------------
+// 7) 3D 뷰어: Plotly 요청/렌더링
+// ---------------------------------------------------------
 async function loadAndRenderPlotly(maskBase64) {
+  "서버에 base64 마스크를 보내 Plotly JSON을 받아 렌더링"
   const container = document.getElementById('viewer3DContainer');
   const mprContainer = document.getElementById('mprContainer');
-
   if (!maskBase64) {
     alert("분석된 데이터가 없습니다.");
     return;
   }
-
   mprContainer.style.display = 'none';
   container.style.display = 'block';
 
-  setTimeout(() => {
-    Plotly.Plots.resize(container);
-  }, 50);
-
   container.innerHTML = '';
-
   const loading = document.createElement('div');
   loading.textContent = "3D 모델링 중...";
   loading.style.color = 'white';
@@ -414,20 +399,12 @@ async function loadAndRenderPlotly(maskBase64) {
 
     if (!res.ok) throw new Error("서버 오류");
     const figData = await res.json();
-
     console.log("PLOTLY 데이터 확인:", figData);
     if (figData.status === 'error') throw new Error(figData.message);
 
     container.innerHTML = '';
-
-    const config = {
-      responsive: true,
-      displayModeBar: true,
-      displaylogo: false
-    };
-
+    const config = { responsive: true, displayModeBar: true, displaylogo: false };
     if (!figData.layout.scene) figData.layout.scene = {};
-
     await Plotly.newPlot('viewer3DContainer', figData.data, figData.layout, config);
 
     setTimeout(() => {
@@ -446,14 +423,13 @@ async function loadAndRenderPlotly(maskBase64) {
     mprContainer.style.display = 'block';
     container.style.display = 'none';
   } finally {
-    if (loading) loading.style.display = 'none'; // loading 변수 스코프 해결
+    if (loading) loading.style.display = 'none';
   }
 }
 
 // ---------------------------------------------------------
-// 6. 이벤트 리스너
+// 8) 이벤트 리스너 (업로드/뷰 전환 등)
 // ---------------------------------------------------------
-
 if (btnView2D) btnView2D.onclick = () => {
   currentViewMode = '2D';
   if (mprContainerEl) mprContainerEl.style.display = 'block';
@@ -461,13 +437,9 @@ if (btnView2D) btnView2D.onclick = () => {
   renderViewer();
 };
 
-// [수정] 3D 버튼: 3D 모드로 설정하고 Plotly 로드
 if (btnView3D) btnView3D.onclick = () => {
   currentViewMode = '3D';
-
-  // ★ [핵심 수정] 전역 변수(window.latest_mask_base64) 또는 로컬 변수(currentMaskBase64) 확인
   let dataToRender = window.latest_mask_base64 || currentMaskBase64;
-
   if (!dataToRender) {
     alert('분석된 데이터가 아직 없습니다. 먼저 분석을 실행해주세요.');
     return;
@@ -477,11 +449,10 @@ if (btnView3D) btnView3D.onclick = () => {
 
 if (btnUpload) btnUpload.onclick = () => {
   if (fileInput) {
-    fileInput.value = ''; // ★ 핵심: 값을 비워줘야 연속 업로드가 가능함
+    fileInput.value = '';
     fileInput.click();
   }
 };
-
 
 if (fileInput) {
   fileInput.onchange = async e => {
@@ -493,8 +464,8 @@ if (fileInput) {
     idx = mri.length - 1;
 
     maskData = null;
-    currentMaskBase64 = null; // 초기화
-    window.latest_mask_base64 = null; // ★ 전역 변수 초기화 (중요)
+    currentMaskBase64 = null;
+    window.latest_mask_base64 = null;
 
     if (f.name.endsWith('.nii') || f.name.endsWith('.nii.gz')) {
       currentViewMode = '2D';
@@ -508,28 +479,15 @@ if (fileInput) {
     const p = patients[currentPatientIndex];
 
     try {
-      if (loadingText) {
-        loadingText.style.display = 'block';
-        loadingText.textContent = "분석 중...";
-      }
+      // if (loadingText) { loadingText.style.display = 'block'; loadingText.textContent = "분석 중..."; }
       if (btnUpload) btnUpload.disabled = true;
 
       const fd = new FormData();
       fd.append('file', f);
       fd.append('patient_id', p?.id || '');
-
-      if (p?.age != null) {
-        fd.append('age', String(p.age));
-      }
-
-      if (p?.apoe4 != null) {
-        fd.append('apoe4', String(p.apoe4));
-      }
-
-      if (p?.sex) {
-        fd.append('sex', p.sex);
-      }
-
+      if (p?.age != null) fd.append('age', String(p.age));
+      if (p?.apoe4 != null) fd.append('apoe4', String(p.apoe4));
+      if (p?.sex) fd.append('sex', p.sex);
       if (p?.icv) fd.append('icv', String(p.icv));
 
       const now = new Date();
@@ -557,12 +515,10 @@ if (fileInput) {
         loadPatientHistory(p.id);
       }
 
-      // ★★★ [핵심 수정] 마스크 데이터 저장 로직 ★★★
       if (result.mask_base64) {
         console.log("마스크 데이터 수신 성공 (길이):", result.mask_base64.length);
-        window.latest_mask_base64 = result.mask_base64; // 전역 변수에 저장
-        currentMaskBase64 = result.mask_base64;          // 로컬 변수에도 저장
-
+        window.latest_mask_base64 = result.mask_base64;
+        currentMaskBase64 = result.mask_base64;
         await loadMaskFromBase64(result.mask_base64);
         log('마스크 데이터 수신 완료. 3D 보기가 가능합니다.');
       } else {
@@ -578,13 +534,16 @@ if (fileInput) {
       alert("분석 중 오류가 발생했습니다.");
     } finally {
       if (btnUpload) btnUpload.disabled = false;
-      if (loadingText) loadingText.style.display = 'none';
+      // if (loadingText) loadingText.style.display = 'none';
     }
   };
 }
 
-// [추가] Base64 문자열을 마스크 데이터로 로드
+// ---------------------------------------------------------
+// 9) Base64 마스크 처리 및 NIfTI 파싱/렌더링
+// ---------------------------------------------------------
 async function loadMaskFromBase64(base64String) {
+  "서버에서 받은 base64 마스크를 파싱해 maskData에 적용"
   try {
     const binaryString = window.atob(base64String);
     const len = binaryString.length;
@@ -625,11 +584,10 @@ async function loadMaskFromBase64(base64String) {
 }
 
 function applyServerResult(result) {
+  "서버 결과를 UI에 적용"
   const { probs, label, summary, features } = result;
-
   if (summaryEl && summary) {
     summaryEl.value = summary;
-    // 현재 선택된 환자의 메모리에 요약 내용 저장
     if (patients[currentPatientIndex]) {
       patients[currentPatientIndex].summary = summary;
     }
@@ -637,9 +595,7 @@ function applyServerResult(result) {
     const CN = Math.round(probs.CN || 0);
     const AD = Math.round(probs.AD || 0);
     const text = `모델 예측: ${label}\n\n확률 분포: CN ${CN}% · AD ${AD}%`;
-
     summaryEl.value = text;
-    // 저장
     if (patients[currentPatientIndex]) {
       patients[currentPatientIndex].summary = text;
     }
@@ -651,51 +607,11 @@ function applyServerResult(result) {
   }
 }
 
-if (brightnessEl) {
-  brightnessEl.addEventListener('input', (e) => {
-    brightness = parseFloat(e.target.value);
-    const bv = document.getElementById('brightnessValue');
-    if (bv) bv.textContent = brightness.toFixed(1);
-    renderAll();
-  });
-}
-
-if (axialPanel) {
-  axialPanel.addEventListener('wheel', (e) => {
-    if (!imageData) return;
-    e.preventDefault();
-    const delta = e.deltaY > 0 ? 1 : -1;
-    currentSlice.axial = Math.max(0, Math.min(dims[2] - 1, currentSlice.axial + delta));
-    renderAxial();
-  });
-}
-
-if (sagittalPanel) {
-  sagittalPanel.addEventListener('wheel', (e) => {
-    if (!imageData) return;
-    e.preventDefault();
-    const delta = e.deltaY > 0 ? 1 : -1;
-    currentSlice.sagittal = Math.max(0, Math.min(dims[0] - 1, currentSlice.sagittal + delta));
-    renderSagittal();
-  });
-}
-
-if (coronalPanel) {
-  coronalPanel.addEventListener('wheel', (e) => {
-    if (!imageData) return;
-    e.preventDefault();
-    const delta = e.deltaY > 0 ? 1 : -1;
-    currentSlice.coronal = Math.max(0, Math.min(dims[1] - 1, currentSlice.coronal + delta));
-    renderCoronal();
-  });
-}
-
-
 // ---------------------------------------------------------
-// 7. NIfTI 파싱 및 렌더링 (★ 핵심 수정됨)
+// 10) NIfTI 파싱 및 렌더링 함수 (핵심)
 // ---------------------------------------------------------
-
 function parseNiftiHeader(buf) {
+  "NIfTI 헤더에서 dim/datatype/bitpix/vox_offset 추출"
   const v = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
   return {
     dim: [v.getInt16(40, true), v.getInt16(42, true), v.getInt16(44, true), v.getInt16(46, true)],
@@ -706,6 +622,7 @@ function parseNiftiHeader(buf) {
 }
 
 function extractImageData(buf, offset, header, isMask = false) {
+  "원시 버퍼에서 이미지 볼륨을 추출하여 Float32Array로 반환"
   const v = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
   const n = header.dim[1] * header.dim[2] * header.dim[3];
   const data = new Float32Array(n);
@@ -714,7 +631,6 @@ function extractImageData(buf, offset, header, isMask = false) {
   for (let i = 0; i < n; i++) {
     let val = 0;
     if (offset + i * (header.bitpix / 8) >= v.byteLength) break;
-
     try {
       if (header.bitpix === 8) val = v.getUint8(offset + i);
       else if (header.bitpix === 16) val = v.getInt16(offset + i * 2, true);
@@ -741,19 +657,20 @@ function extractImageData(buf, offset, header, isMask = false) {
 }
 
 function renderAll() {
+  "세 방향 모두 렌더"
   renderAxial();
   renderSagittal();
   renderCoronal();
 }
 
 function renderAxial() {
+  "Axial 뷰 렌더링 및 마스크 오버레이"
   if (!dims || !imageData) return;
   const c = document.getElementById('axialCanvas');
   if (!c) return;
   const ctx = c.getContext('2d', { willReadFrequently: true });
   c.width = dims[0];
   c.height = dims[1];
-
   const img = ctx.createImageData(dims[0], dims[1]);
   const z = currentSlice.axial;
 
@@ -762,23 +679,15 @@ function renderAxial() {
     for (let x = 0; x < dims[0]; x++) {
       const idx = x + flippedY * dims[0] + z * dims[0] * dims[1];
       if (idx < 0 || idx >= imageData.length) continue;
-
       const v = Math.min(255, imageData[idx] * brightness);
       const p = (y * dims[0] + x) * 4;
-
-      img.data[p] = v;
-      img.data[p + 1] = v;
-      img.data[p + 2] = v;
-      img.data[p + 3] = 255;
+      img.data[p] = v; img.data[p + 1] = v; img.data[p + 2] = v; img.data[p + 3] = 255;
 
       if (maskData && idx < maskData.length) {
         const maskVal = Math.round(maskData[idx]);
         if (maskVal > 0) {
-          if (maskVal === 1) {
-            img.data[p] = 0; img.data[p + 1] = 255; img.data[p + 2] = 0; img.data[p + 3] = 150;
-          } else {
-            img.data[p] = 255; img.data[p + 1] = 0; img.data[p + 2] = 0; img.data[p + 3] = 150;
-          }
+          if (maskVal === 1) { img.data[p] = 0; img.data[p + 1] = 255; img.data[p + 2] = 0; img.data[p + 3] = 150; }
+          else { img.data[p] = 255; img.data[p + 1] = 0; img.data[p + 2] = 0; img.data[p + 3] = 150; }
         }
       }
     }
@@ -787,7 +696,6 @@ function renderAxial() {
   ctx.putImageData(img, 0, 0);
   const cx = currentSlice.sagittal;
   const cy = dims[1] - 1 - currentSlice.coronal;
-
   drawCrosshair(ctx, c.width, c.height, cx, cy);
 
   const infoEl = document.getElementById('axialInfo');
@@ -795,6 +703,7 @@ function renderAxial() {
 }
 
 function renderSagittal() {
+  "Sagittal 뷰 렌더링"
   if (!dims || !imageData) return;
   const c = document.getElementById('sagittalCanvas');
   if (!c) return;
@@ -809,25 +718,16 @@ function renderSagittal() {
     for (let y = 0; y < dims[1]; y++) {
       const flippedY = dims[1] - 1 - y;
       const idx = x + flippedY * dims[0] + flippedZ * dims[0] * dims[1];
-
       if (idx < 0 || idx >= imageData.length) continue;
-
       const v = Math.min(255, imageData[idx] * brightness);
       const p = (z * dims[1] + y) * 4;
-
-      img.data[p] = v;
-      img.data[p + 1] = v;
-      img.data[p + 2] = v;
-      img.data[p + 3] = 255;
+      img.data[p] = v; img.data[p + 1] = v; img.data[p + 2] = v; img.data[p + 3] = 255;
 
       if (maskData && idx < maskData.length) {
         const maskVal = Math.round(maskData[idx]);
         if (maskVal > 0) {
-          if (maskVal === 1) {
-            img.data[p] = 0; img.data[p + 1] = 255; img.data[p + 2] = 0; img.data[p + 3] = 150;
-          } else {
-            img.data[p] = 255; img.data[p + 1] = 0; img.data[p + 2] = 0; img.data[p + 3] = 150;
-          }
+          if (maskVal === 1) { img.data[p] = 0; img.data[p + 1] = 255; img.data[p + 2] = 0; img.data[p + 3] = 150; }
+          else { img.data[p] = 255; img.data[p + 1] = 0; img.data[p + 2] = 0; img.data[p + 3] = 150; }
         }
       }
     }
@@ -835,7 +735,6 @@ function renderSagittal() {
   ctx.putImageData(img, 0, 0);
   const cx = dims[1] - 1 - currentSlice.coronal;
   const cy = dims[2] - 1 - currentSlice.axial;
-
   drawCrosshair(ctx, c.width, c.height, cx, cy);
 
   const infoEl = document.getElementById('sagittalInfo');
@@ -843,6 +742,7 @@ function renderSagittal() {
 }
 
 function renderCoronal() {
+  "Coronal 뷰 렌더링"
   if (!dims || !imageData) return;
   const c = document.getElementById('coronalCanvas');
   if (!c) return;
@@ -857,25 +757,16 @@ function renderCoronal() {
     for (let x = 0; x < dims[0]; x++) {
       const flippedX = dims[0] - 1 - x;
       const idx = flippedX + y * dims[0] + flippedZ * dims[0] * dims[1];
-
       if (idx < 0 || idx >= imageData.length) continue;
-
       const v = Math.min(255, imageData[idx] * brightness);
       const p = (z * dims[0] + x) * 4;
-
-      img.data[p] = v;
-      img.data[p + 1] = v;
-      img.data[p + 2] = v;
-      img.data[p + 3] = 255;
+      img.data[p] = v; img.data[p + 1] = v; img.data[p + 2] = v; img.data[p + 3] = 255;
 
       if (maskData && idx < maskData.length) {
         const maskVal = Math.round(maskData[idx]);
         if (maskVal > 0) {
-          if (maskVal === 1) {
-            img.data[p] = 0; img.data[p + 1] = 255; img.data[p + 2] = 0; img.data[p + 3] = 150;
-          } else {
-            img.data[p] = 255; img.data[p + 1] = 0; img.data[p + 2] = 0; img.data[p + 3] = 150;
-          }
+          if (maskVal === 1) { img.data[p] = 0; img.data[p + 1] = 255; img.data[p + 2] = 0; img.data[p + 3] = 150; }
+          else { img.data[p] = 255; img.data[p + 1] = 0; img.data[p + 2] = 0; img.data[p + 3] = 150; }
         }
       }
     }
@@ -883,7 +774,6 @@ function renderCoronal() {
   ctx.putImageData(img, 0, 0);
   const cx = dims[0] - 1 - currentSlice.sagittal;
   const cy = dims[2] - 1 - currentSlice.axial;
-
   drawCrosshair(ctx, c.width, c.height, cx, cy);
 
   const infoEl = document.getElementById('coronalInfo');
@@ -891,6 +781,7 @@ function renderCoronal() {
 }
 
 function drawCrosshair(ctx, width, height, x, y) {
+  "십자선(크로스헤어) 그리기"
   ctx.beginPath();
   ctx.setLineDash([8, 3]);
   ctx.strokeStyle = "#9ab3fd";
@@ -905,11 +796,51 @@ function drawCrosshair(ctx, width, height, x, y) {
   ctx.resetTransform();
 }
 
-// 초기화 실행
+// brightness 컨트롤이 있는 경우 이벤트 바인딩
+if (brightnessEl) {
+  brightnessEl.addEventListener('input', (e) => {
+    brightness = parseFloat(e.target.value);
+    const bv = document.getElementById('brightnessValue');
+    if (bv) bv.textContent = brightness.toFixed(1);
+    renderAll();
+  });
+}
+
+// 휠 이벤트 바인딩
+if (axialPanel) {
+  axialPanel.addEventListener('wheel', (e) => {
+    if (!imageData) return;
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? 1 : -1;
+    currentSlice.axial = Math.max(0, Math.min(dims[2] - 1, currentSlice.axial + delta));
+    renderAxial();
+  });
+}
+if (sagittalPanel) {
+  sagittalPanel.addEventListener('wheel', (e) => {
+    if (!imageData) return;
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? 1 : -1;
+    currentSlice.sagittal = Math.max(0, Math.min(dims[0] - 1, currentSlice.sagittal + delta));
+    renderSagittal();
+  });
+}
+if (coronalPanel) {
+  coronalPanel.addEventListener('wheel', (e) => {
+    if (!imageData) return;
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? 1 : -1;
+    currentSlice.coronal = Math.max(0, Math.min(dims[1] - 1, currentSlice.coronal + delta));
+    renderCoronal();
+  });
+}
+
+// ---------------------------------------------------------
+// 초기화
+// ---------------------------------------------------------
 async function init() {
   if (issuedAtEl) issuedAtEl.textContent = todayISO();
   await loadPatients();
   setupInteraction();
 }
-
 init();

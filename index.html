@@ -13,6 +13,7 @@
 <body>
   <div class="app">
 
+    <!-- Toolbar: 주요 액션 버튼 -->
     <div class="toolbar">
       <button class="tool-btn" id="btnSave">저장</button>
       <div class="tool-sep"></div>
@@ -22,8 +23,10 @@
       <div style="margin-left:auto" class="muted mono">발행: <span id="issuedAt">—</span></div>
     </div>
 
+    <!-- Panes: 좌(환자), 중앙(뷰어), 우(환자정보) -->
     <div class="panes">
 
+      <!-- 환자 목록 -->
       <div class="panel">
         <div class="panel-header">환자 목록</div>
         <div class="panel-body">
@@ -31,6 +34,7 @@
         </div>
       </div>
 
+      <!-- 중앙: 영상 뷰어 -->
       <div class="panel">
         <div class="panel-header">영상 뷰어</div>
         <div class="panel-body">
@@ -44,7 +48,7 @@
             <span id="defaultImageText" style="display:block;">No Image</span>
             <img id="viewerImg" style="display:none; max-width:100%; max-height:100%;">
             <div id="mprContainer" style="display:none;">
-              <!-- Axial -->
+              <!-- 3창 MPR: Axial / Sagittal / Coronal -->
               <div class="three-panel">
                 <div id="axialPanel" class="three-subpanel">
                   <canvas id="axialCanvas"></canvas>
@@ -56,7 +60,6 @@
                   <div class="info"><span id="axialInfo"></span></div>
                 </div>
 
-                <!-- Sagittal -->
                 <div id="sagittalPanel" class="three-subpanel">
                   <canvas id="sagittalCanvas"></canvas>
                   <div class="dir-label dir-top">S</div>
@@ -67,7 +70,6 @@
                   <div class="slice-info" id="sagittalInfo"></div>
                 </div>
 
-                <!-- Coronal -->
                 <div id="coronalPanel" class="three-subpanel">
                   <canvas id="coronalCanvas"></canvas>
                   <div class="dir-label dir-top">S</div>
@@ -79,6 +81,8 @@
                 </div>
               </div>
             </div>
+
+            <!-- 3D 렌더링 컨테이너 -->
             <div id="viewer3DContainer"
               style="display:none; width: 100%; height: 600px !important; min-height: 600px; background-color: white; z-index: 999;">
             </div>
@@ -86,6 +90,7 @@
         </div>
       </div>
 
+      <!-- 환자 정보 및 결과 -->
       <div class="panel">
         <div class="panel-header">환자 정보</div>
         <div class="panel-body">
@@ -111,12 +116,14 @@
         </div>
       </div>
 
+      <!-- 로그 영역: 전체 가로 사용 -->
       <div class="log-panel">
         <div class="section-title">작업 로그</div>
         <div class="log-list" id="logList"></div>
       </div>
     </div>
 
+    <!-- 스크립트 로드 (마지막에 로드) -->
     <script src="js/script.js"></script>
 </body>
 

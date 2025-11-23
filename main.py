@@ -1,4 +1,5 @@
 # backend/main.py
+# 정리: 상수/설정 -> 유틸(파일/변환) -> ICV/마스크 처리 -> 해마 특성 계산 -> 모델 추론 -> DB 관련 -> API 엔드포인트
 from datetime import datetime
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,20 +22,19 @@ from scipy.ndimage import label as cc_label
 import json
 import plotly.graph_objects as go
 from skimage import measure
-from scipy.ndimage import binary_closing
 from scipy.ndimage import gaussian_filter
-from skimage.filters import gaussian
+# from scipy.ndimage import binary_closing      # currently unused -> commented
+# from skimage.filters import gaussian           # currently unused -> commented
 from nilearn.masking import compute_brain_mask
 from nilearn.image import resample_to_img
 
 app = FastAPI()
 
-# CORS 설정
+# CORS 설정 (개발용)
 origins = [
     "http://127.0.0.1:5500",
     "http://localhost:5500",
 ]
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -43,13 +43,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-@app.options("/api/process_mri")
-async def options_handler():
-    return JSONResponse(status_code=200)
-
-
-# MySQL 설정
+# ------------------------------
+# 상수 / 경로 / 모델 로드
+# ------------------------------
 DB_CONFIG = {
     "host": "127.0.0.1",
     "user": "root",
@@ -59,11 +55,9 @@ DB_CONFIG = {
     "cursorclass": pymysql.cursors.DictCursor,
 }
 
-# PATH / 환경 설정
 MODEL_PATH = Path("models/xgb_hippo.json")
 DCM2NIIX_BIN = "dcm2niix"
 
-# WSL / Conda 설정 (WSL의 기본 distro 사용)
 HIPPMAPP3R_ENV_NAME = "hippmapp3r"
 CONDA_INIT = "source ~/miniconda3/etc/profile.d/conda.sh"
 
@@ -71,7 +65,7 @@ UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
-# XGBoost 모델 로드
+# XGBoost 모델 로드 (한 번만 로드)
 xgb_model = xgb.XGBClassifier()
 xgb_model.load_model(MODEL_PATH)
 
@@ -88,8 +82,9 @@ FEATURE_COLS = [
     "SEX_FEMALE",
 ]
 
-
-# API 반환 모델
+# ------------------------------
+# Pydantic 응답/요청 모델
+# ------------------------------
 class ProcessResult(BaseModel):
     label: str
     probs: dict
@@ -99,20 +94,19 @@ class ProcessResult(BaseModel):
     exam_datetime: str | None = None
     exam_id: int | None = None
 
-# 환자 목록
 class PatientOut(BaseModel):
     patient_id: str
     name: str
     sex: str
     age: int
-    height_cm: int | None = None # 추가됨
-    weight_kg: int | None = None # 추가됨
+    height_cm: int | None = None
+    weight_kg: int | None = None
     icv: float | None = None 
-    apoe4: Optional[int] = Form(None)
+    apoe4: Optional[int] = None
 
 class MaskRequest(BaseModel):
     mask_base64: str
-    
+
 class ExamHistoryItem(BaseModel):
     exam_id: int
     exam_datetime: str
@@ -120,15 +114,18 @@ class ExamHistoryItem(BaseModel):
     total_hipp_vol: int
     created_at: str
 
-# 공통 함수
+# ------------------------------
+# 파일 / 변환 유틸 함수
+# ------------------------------
 def save_file_permanent(upload: UploadFile) -> Path:
+    "업로드 파일을 uploads 디렉토리에 영구 저장"
     dest = UPLOAD_DIR / upload.filename
     with dest.open("wb") as f:
         shutil.copyfileobj(upload.file, f)
     return dest
 
-
 def dicom_to_nifti(zip_path: Path) -> Path:
+    "zip 내 DICOM을 dcm2niix로 NIfTI 변환 (출력 파일 반환)"
     unzip = zip_path.parent / "dicom_unzip"
     unzip.mkdir(exist_ok=True)
     with zipfile.ZipFile(zip_path, "r") as z:
@@ -145,20 +142,20 @@ def dicom_to_nifti(zip_path: Path) -> Path:
         raise RuntimeError("NIfTI 생성 실패")
     return nii[0]
 
-
 def win_to_wsl(path: Path | str) -> str:
+    "Windows 경로를 WSL 경로로 변환 (WSL에서 hippmapp3r 호출 시 사용)"
     p = Path(path).resolve() 
-    
-    drive = p.drive[0].lower()
+    drive = p.drive[0].lower() if p.drive else ''
     rest = str(p).replace(p.drive, "").replace("\\", "/")
     return f"/mnt/{drive}{rest}"
 
-
+# ------------------------------
+# HippMapp3r 실행 및 마스크 후처리
+# ------------------------------
 def run_hippmapp3r(nii: Path) -> Path:
-
+    "WSL로 HippMapp3r를 실행하고 pred.nii.gz 반환"
     out_dir = nii.parent / "hippmapp3r"
     out_dir.mkdir(exist_ok=True)
-
     pred_path = out_dir / "pred.nii.gz"
 
     nii_wsl = win_to_wsl(nii)
@@ -171,66 +168,32 @@ def run_hippmapp3r(nii: Path) -> Path:
     )
 
     full_cmd = ["wsl", "bash", "-lc", cmd]
-
     print("=== WSL CMD ===")
     print(" ".join(full_cmd))
     print("================")
 
-    result = subprocess.run(
-        full_cmd,
-        capture_output=True,
-        text=True,
-    )
+    result = subprocess.run(full_cmd, capture_output=True, text=True)
 
     print("=== WSL STDOUT ===")
     print(result.stdout)
     print("=== WSL STDERR ===")
     print(result.stderr)
 
-    # 1) 세그멘테이션 결과 파일이 아예 없으면 진짜 실패로 취급
     if not pred_path.exists():
         raise RuntimeError(
             f"HippMapp3r(WSL) 실행 실패 (pred.nii.gz 없음, code={result.returncode}): {result.stderr}"
         )
 
-    # 2) pred.nii.gz는 있는데, QC 때문에 returncode != 0 이면 경고만 찍고 계속 진행
     if result.returncode != 0:
         print(
             "⚠ HippMapp3r가 비정상 종료(returncode != 0) 했지만 "
-            "pred.nii.gz는 생성됨. QC(ANTs ConvertScalarImageToRGB) 단계 오류로 추정, 무시하고 계속 진행."
+            "pred.nii.gz는 생성됨. QC 단계 오류로 추정, 무시하고 계속 진행."
         )
 
     return pred_path
 
-def calculate_icv_nilearn(nifti_path: Path) -> float:
-    """
-    Nilearn을 사용하여 ICV(mm3)를 계산
-    """
-    try:
-        print(f" Nilearn ICV 계산 시작: {nifti_path}")
-        img = nib.load(str(nifti_path))
-        
-        # 뇌 마스크 생성
-        mask_img = compute_brain_mask(img, threshold=0.5, connected=True)
-        
-        # 부피 계산
-        mask_data = mask_img.get_fdata()
-        voxel_count = np.sum(mask_data > 0)
-        
-        header = img.header
-        zooms = header.get_zooms()
-        one_voxel_vol = zooms[0] * zooms[1] * zooms[2]
-        
-        icv_mm3 = voxel_count * one_voxel_vol
-        print(f" ICV 계산 완료: {icv_mm3:.2f} mm³")
-        return float(icv_mm3)
-
-    except Exception as e:
-        print(f" ICV 계산 실패: {e}")
-        return 0.0
-    
-
 def largest_cc(mask):
+    "binary mask의 가장 큰 connected component만 반환"
     labeled, comp = cc_label(mask)
     if comp == 0:
         return mask
@@ -238,8 +201,8 @@ def largest_cc(mask):
     best = np.argmax(sizes) + 1
     return (labeled == best).astype(np.uint8)
 
-
 def split_left_right(pred_path: Path):
+    "pred.nii.gz에서 라벨 1(L)과 2(R)을 분리하여 left.nii.gz, right.nii.gz 저장"
     img = nib.load(str(pred_path))
     data = img.get_fdata()
 
@@ -254,9 +217,32 @@ def split_left_right(pred_path: Path):
 
     return left, right
 
+# ------------------------------
+# ICV 계산
+# ------------------------------
+def calculate_icv_nilearn(nifti_path: Path) -> float:
+    "nilearn의 compute_brain_mask로 ICV(mm3) 계산"
+    try:
+        print(f" Nilearn ICV 계산 시작: {nifti_path}")
+        img = nib.load(str(nifti_path))
+        mask_img = compute_brain_mask(img, threshold=0.5, connected=True)
+        mask_data = mask_img.get_fdata()
+        voxel_count = np.sum(mask_data > 0)
+        header = img.header
+        zooms = header.get_zooms()
+        one_voxel_vol = zooms[0] * zooms[1] * zooms[2]
+        icv_mm3 = voxel_count * one_voxel_vol
+        print(f" ICV 계산 완료: {icv_mm3:.2f} mm³")
+        return float(icv_mm3)
+    except Exception as e:
+        print(f" ICV 계산 실패: {e}")
+        return 0.0
 
-# compute_features
+# ------------------------------
+# 해마 특성 계산
+# ------------------------------
 def compute_features(left_path: Path, right_path: Path, icv: float | None):
+    "Left/Right 마스크로부터 부피 및 ICV 정규화 지표 계산"
     imgL = nib.load(str(left_path))
     imgR = nib.load(str(right_path))
 
@@ -289,9 +275,11 @@ def compute_features(left_path: Path, right_path: Path, icv: float | None):
 
     return feats
 
-
-# XGBoost
+# ------------------------------
+# 모델: 벡터 생성 및 추론
+# ------------------------------
 def build_vec(feats):
+    "FEATURE_COLS 순서에 따라 입력 벡터 생성"
     vector = []
     for c in FEATURE_COLS:
         val = feats.get(c)
@@ -299,18 +287,18 @@ def build_vec(feats):
             vector.append(np.nan)
         else:
             vector.append(float(val))
-            
     return np.array(vector, dtype=np.float32).reshape(1, -1)
 
 def infer(feats):
+    "모델로 예측(확률) 반환"
     p = xgb_model.predict_proba(build_vec(feats))[0]
     raw = list(xgb_model.classes_)
     mapped = ["CN" if c in [0, "0"] else "AD" for c in raw]
     probs = {c: float(pp * 100) for c, pp in zip(mapped, p)}
     return max(probs, key=probs.get), probs
 
-
 def make_summary(label, probs, feats):
+    "간단한 결과 요약 문자열 생성"
     CN = round(probs["CN"])
     AD = round(probs["AD"])
     guide = "정상 범위로 예측됨." if label == "CN" else "알츠하이머 가능성이 높음."
@@ -318,27 +306,29 @@ def make_summary(label, probs, feats):
         f"모델 예측: {label}\n"
         f"{guide}\n\n"
         f"확률: CN {CN}% · AD {AD}%\n"
-        f"총 해마 부피: {feats['total_hipp_vol_mm3']} mm³"
+        f"총 해마 부피: {feats.get('total_hipp_vol_mm3', '—')} mm³"
     )
 
+# ------------------------------
+# DB 관련 함수
+# ------------------------------
 def save_exam(patient_id, exam_dt):
+    "mri_exams에 검사 기록을 저장하고 exam_id 반환"
     conn = pymysql.connect(**DB_CONFIG)
     try:
         with conn.cursor() as cur:
-            # mri_exams 테이블에 날짜 저장
             cur.execute(
                 "INSERT INTO mri_exams (patient_id, exam_datetime) VALUES (%s, %s)",
                 (patient_id, exam_dt)
             )
-            # 방금 저장된 행의 ID(exam_id)를 가져옴 (★핵심)
             exam_id = cur.lastrowid 
         conn.commit()
         return exam_id
     finally:
         conn.close()
-        
-# DB 저장
+
 def save_db(pid, filename, feats, label, probs, exam_id):
+    "mri_results 테이블에 결과 행 저장"
     conn = pymysql.connect(**DB_CONFIG)
     try:
         with conn.cursor() as cur:
@@ -361,9 +351,9 @@ def save_db(pid, filename, feats, label, probs, exam_id):
                     feats["right_hipp_vol_mm3"],
                     feats["total_hipp_vol_mm3"],
                     feats["icv"],
-                    feats["AGE"],           
-                    "F" if feats["SEX_FEMALE"] else "M",
-                    feats["APOE4"],
+                    feats.get("AGE"),           
+                    "F" if feats.get("SEX_FEMALE") else "M",
+                    feats.get("APOE4"),
                     filename,
                     exam_id
                 ),
@@ -372,8 +362,17 @@ def save_db(pid, filename, feats, label, probs, exam_id):
     finally:
         conn.close()
 
+# ------------------------------
+# API 엔드포인트
+# ------------------------------
+@app.options("/api/process_mri")
+async def options_handler():
+    "CORS preflight 처리"
+    return JSONResponse(status_code=200)
+
 @app.get("/api/patients", response_model=List[PatientOut])
 def get_patients():
+    "환자 목록 반환"
     conn = pymysql.connect(**DB_CONFIG)
     try:
         with conn.cursor() as cur:
@@ -403,8 +402,6 @@ def get_patients():
     finally:
         conn.close()
 
-
-# 메인 API
 @app.post("/api/process_mri", response_model=ProcessResult)
 async def process_mri(
     file: UploadFile = File(...),
@@ -415,9 +412,9 @@ async def process_mri(
     icv: float | None = Form(None),
     exam_datetime: str | None = Form(None)
 ):
+    "메인 파이프라인: 파일 저장 -> (DICOM->NIfTI) -> ICV 계산 -> HippMapp3r -> 특징 계산 -> 예측 -> DB저장 -> 마스크 base64 반환"
     # 1. 파일 저장 및 변환
     nii = save_file_permanent(file)
-    
     if nii.suffix.lower() == ".zip":
         nii = dicom_to_nifti(nii)
 
@@ -433,78 +430,83 @@ async def process_mri(
     else:
         dt_obj = datetime.now()
 
-    # 2-1. ICV 계산 처리
+    # 3. ICV 계산 (수동값 없으면 자동 계산)
     final_icv = icv
     if final_icv is None or final_icv == 0:
         print(" ICV 정보가 없어 자동 계산을 시작합니다...")
         calculated_icv = calculate_icv_nilearn(nii)
-
         if calculated_icv > 0:
             final_icv = calculated_icv
         else:
             print("⚠️ ICV 계산 실패, 기본값 0.0 사용")
             final_icv = 0.0
-
     print(f" 최종 적용 ICV: {final_icv}")
 
-    # 3. 분석 실행
+    # 4. 해마 세그멘테이션 실행 및 좌우 분리
     pred = run_hippmapp3r(nii)
     left, right = split_left_right(pred)
 
-    # 4. Feature 계산
+    # 5. Feature 계산 및 메타데이터 결합
     feats = compute_features(left, right, final_icv)
     feats["AGE"] = age 
     feats["APOE4"] = apoe4
-
     if sex is not None:
         feats["SEX_FEMALE"] = 1.0 if sex.upper().startswith("F") else 0.0
     else:
         feats["SEX_FEMALE"] = None
-        
-    # 5. AI 예측
+
+    # 6. AI 예측 및 요약
     label, probs = infer(feats)
     summary = make_summary(label, probs, feats)
 
-    # 6. DB 저장
+    # 7. DB 저장 (exam 추가 후 결과 저장)
     exam_id = save_exam(patient_id, dt_obj)
     save_db(patient_id, file.filename, feats, label, probs, exam_id)
 
-    # 7. 마스크 파일 처리
+    # 8. 마스크 파일을 원본 공간으로 리샘플링 후 base64 인코딩 반환
     mask_b64 = None
-    import os
-    
-    if pred.exists():
-        try:
+    try:
+        if pred.exists():
+            # (1) 원본과 예측 마스크 로드
             orig_img = nib.load(str(nii))
             pred_img = nib.load(str(pred))
-
-            # Shape이 같더라도 Affine(방향)이 다를 수 있으므로 무조건 원본 기준으로 리샘플링 수행
+            
             print(f"Mask 정합성 확보를 위한 리샘플링 수행...")
             
-            # interpolation='nearest'는 마스크(0,1,2) 값이 소수점이 되지 않게 유지함
-            resampled_mask = resample_to_img(pred_img, orig_img, interpolation='nearest')
+            # (2) 원본 MRI 그리드에 맞춰 마스크 리샘플링 (위치 보정 핵심)
+            # interpolation='nearest'를 써야 0, 1, 2 라벨이 유지됨
+            resampled_img = resample_to_img(pred_img, orig_img, interpolation='nearest')
             
-            nib.save(resampled_mask, str(pred))
-            print("리샘플링 및 덮어쓰기 완료.")
+            # (3) 데이터 추출 및 uint8(0~255) 변환
+            # 리샘플링 결과가 float일 수 있으므로 반올림 후 정수형으로 변환
+            # 이렇게 해야 용량도 줄고 프론트엔드에서 파싱할 때 오류가 없음
+            resampled_data = np.round(resampled_img.get_fdata()).astype(np.uint8)
 
-            size_bytes = os.path.getsize(pred)
-
-            size_bytes = os.path.getsize(pred)
-            print(f">>> DEBUG: pred exists at {pred} size={size_bytes} bytes")
+            # (4) [중요] 원본 이미지의 Affine(좌표 정보)을 사용하여 새 NIfTI 생성
+            # 이렇게 하면 원본과 물리적으로 100% 동일한 공간을 갖게 됨
+            final_mask_img = nib.Nifti1Image(resampled_data, orig_img.affine)
             
+            # 헤더에도 데이터 타입 명시
+            final_mask_img.header.set_data_dtype(np.uint8)
+            
+            # (5) 덮어쓰기
+            nib.save(final_mask_img, str(pred))
+            print("리샘플링, 타입 변환(uint8), 좌표 교정 완료.")
+
+            # (6) Base64 인코딩
             with open(pred, "rb") as f:
                 data_bytes = f.read()
                 mask_b64 = base64.b64encode(data_bytes).decode('utf-8')
-                
-        except Exception as e:
-            print(">>> ERROR reading/resampling pred file:", e)
+        else:
+            print(">>> DEBUG: pred file does NOT exist:", pred)
             mask_b64 = None
-    else:
-        print(">>> DEBUG: pred file does NOT exist:", pred)
+    except Exception as e:
+        print(">>> ERROR reading/resampling pred file:", e)
+        import traceback
+        traceback.print_exc() # 에러 상세 출력
         mask_b64 = None
-
-
-    # 8. 결과 반환
+        
+    # 9. 결과 반환
     return JSONResponse(
         ProcessResult(
             label=label,
@@ -517,9 +519,9 @@ async def process_mri(
         ).dict()
     )
 
-    
 @app.get("/api/exams/{exam_id}")
 def get_exam_detail(exam_id: int):
+    "단일 exam 결과 상세 조회"
     conn = pymysql.connect(**DB_CONFIG)
     try:
         with conn.cursor() as cur:
@@ -529,7 +531,6 @@ def get_exam_detail(exam_id: int):
             """
             cur.execute(sql, (exam_id,))
             row = cur.fetchone()
-            
             if not row:
                 return JSONResponse({"status": "error", "message": "데이터 없음"}, status_code=404)
 
@@ -543,7 +544,7 @@ def get_exam_detail(exam_id: int):
                 "right_hipp_vol_icv_norm": None,
                 "total_hipp_vol_icv_norm": None
             }
-            
+
             if row['icv'] and row['icv'] > 0:
                 scale = 1000.0 / row['icv']
                 feats["left_hipp_vol_icv_norm"] = round(row['left_hipp_vol'] * scale, 3)
@@ -567,11 +568,11 @@ def get_exam_detail(exam_id: int):
                 }
             }
     finally:
-        conn.close()    
-    
+        conn.close()
 
 @app.get("/api/patients/{patient_id}/history", response_model=List[ExamHistoryItem])
 def get_patient_history(patient_id: str):
+    "환자별 검사 이력 반환"
     conn = pymysql.connect(**DB_CONFIG)
     try:
         with conn.cursor() as cur:
@@ -600,15 +601,14 @@ def get_patient_history(patient_id: str):
                 ))
             return history
     except pymysql.MySQLError as e:
-        # 로그 남기고, JSON으로 명확히 반환 (CORS 미들 문제 완화)
         print("DB error in get_patient_history:", e)
         return JSONResponse({"status": "error", "message": "DB error: " + str(e)}, status_code=500)
     finally:
         conn.close()
-        
-        
+
 @app.post("/api/get_plotly_3d")
 async def get_plotly_3d(req: MaskRequest):
+    "mask_base64를 받아 Plotly 3D mesh JSON을 생성하여 반환"
     try:
         print(">>> [3D 최종] 홈 버튼 고정 + 카메라 90도 회전 + 라벨/축 표시 + 고화질 렌더링")
         import base64, gzip
@@ -624,55 +624,37 @@ async def get_plotly_3d(req: MaskRequest):
         data = np.round(img.get_fdata()).astype(int)
         Path(tmp_path).unlink()
 
-        # 데이터 확인
         if np.sum(data > 0) < 10:
             return JSONResponse({"status": "error", "message": "해마 데이터가 없습니다."}, status_code=400)
 
-        # [1] 통합 중심점 계산 (겹침 해결)
         coords = np.argwhere(data > 0)
-        # MRI 좌표 (z, y, x)
         z_mean = np.mean(coords[:, 0])
         y_mean = np.mean(coords[:, 1])
         x_mean = np.mean(coords[:, 2])
-        
-        # 전체 데이터의 무게 중심 (이 점을 0,0,0으로 맞춤)
         center = np.array([z_mean, y_mean, x_mean])
 
         traces = []
         label_positions = {}
-        
-        # 방향 표시를 위한 범위 계산용
         all_x, all_y, all_z = [], [], []
-        
+
         def create_trace(label_id, color, name, text_label):
+            "label_id에 해당하는 볼륨을 추출하여 Mesh3d trace 생성"
             if np.sum(data == label_id) < 10: return None
-            
             m = (data == label_id).astype(float)
-            m_smooth = gaussian_filter(m, sigma=0.5) # 값이 클 수록 뭉툭해짐 (0.5~1.0)
-            
+            m_smooth = gaussian_filter(m, sigma=0.5) # 값이 클 수록 매끈매끈
             try:
                 verts, faces, _, _ = measure.marching_cubes(m_smooth, level=0.5, step_size=1)
-                
-                # MRI(z,y,x) -> Plotly(x,y,z) 변환
                 verts_xyz = np.vstack([verts[:, 2], verts[:, 1], verts[:, 0]]).T
-                
-                # 좌표 이동: (원래 좌표) - (통합 중심점)
                 verts_centered = verts_xyz - np.array([center[2], center[1], center[0]])
-
-                # 범위 수집
                 all_x.extend(verts_centered[:, 0])
                 all_y.extend(verts_centered[:, 1])
                 all_z.extend(verts_centered[:, 2])
-
-                # 라벨 위치
                 label_positions[text_label] = {
                     "x": np.mean(verts_centered[:, 0]),
                     "y": np.mean(verts_centered[:, 1]),
                     "z": np.mean(verts_centered[:, 2]),
                     "color": color
                 }
-
-                # ★★★ [핵심 수정] 3D 렌더링 퀄리티 향상 ★★★
                 return go.Mesh3d(
                     x=verts_centered[:, 0].tolist(),
                     y=verts_centered[:, 1].tolist(),
@@ -683,27 +665,14 @@ async def get_plotly_3d(req: MaskRequest):
                     color=color,
                     opacity=1.0,
                     name=name,
-                    
-                    # 1. 부드러운 쉐이딩 적용 (각진 느낌 제거)
-                    flatshading=False, 
-                    
-                    # 2. 조명 효과 개선 (유기체 조직 느낌 강화)
-                    # [옵션 1] 가장 보편적인 의료용 3D 스타일 (Soft Matte)
-                    lighting=dict(
-                        ambient=0.5,      # 주변광을 적당히 높여 그림자가 너무 어둡지 않게 (0.4 -> 0.5)
-                        diffuse=0.8,      # 기본 색상을 선명하게 유지
-                        roughness=0.7,    # ★핵심: 표면을 매트하게 처리하여 플라스틱 느낌 제거 (0.1 -> 0.7)
-                        specular=0.1,     # ★핵심: 반사광을 확 줄여서 눈부심 방지 (0.4 -> 0.1)
-                        fresnel=0.5       # 외곽선에 은은한 빛을 주어 입체감 살림
-                    ),
-                    # 조명 위치를 정면 위쪽으로 배치하여 그림자를 자연스럽게
+                    flatshading=False,
+                    lighting=dict(ambient=0.5, diffuse=0.8, roughness=0.7, specular=0.1, fresnel=0.5),
                     lightposition=dict(x=1000, y=1000, z=5000)
                 )
             except Exception as e:
                 print(f"메쉬 오류 ({name}): {e}")
                 return None
 
-        # 왼쪽(1)=초록, 오른쪽(2)=빨강
         t1 = create_trace(1, '#27ae60', 'Left Hippocampus', "L")
         if t1: traces.append(t1)
         t2 = create_trace(2, '#e74c3c', 'Right Hippocampus', "R")
@@ -714,10 +683,7 @@ async def get_plotly_3d(req: MaskRequest):
 
         fig = go.Figure(data=traces)
 
-        # [2] 어노테이션 (라벨 + 방향)
         annotations = []
-        
-        # L/R 라벨
         for txt, pos in label_positions.items():
             annotations.append(dict(
                 showarrow=False,
@@ -727,19 +693,13 @@ async def get_plotly_3d(req: MaskRequest):
                 xanchor="center", yanchor="bottom"
             ))
 
-        # x, y, z 방향 표시
         padding = 20
         if all_x:
             max_x, max_y, max_z = max(all_x), max(all_y), max(all_z)
-            # X축
             annotations.append(dict(showarrow=False, x=max_x + padding, y=0, z=0, text="x", font=dict(color="black", size=14)))
-            # Y축
             annotations.append(dict(showarrow=False, x=0, y=max_y + padding, z=0, text="y", font=dict(color="black", size=14)))
-            # Z축
             annotations.append(dict(showarrow=False, x=0, y=0, z=max_z + padding, text="z", font=dict(color="black", size=14)))
 
-        # [3] 레이아웃 & 카메라 설정 (핵심)
-        # ▼▼▼ [수정됨] 여기서부터 들여쓰기를 왼쪽으로 당겼습니다. ▼▼▼
         axis_style = dict(
             showgrid=False, zeroline=False, showbackground=False, showticklabels=False,
             visible=False, showline=False
@@ -753,8 +713,6 @@ async def get_plotly_3d(req: MaskRequest):
                 aspectmode='data',
                 bgcolor='white',
                 annotations=annotations,
-                
-                # 카메라 설정
                 camera=dict(
                     eye=dict(x=1.5, y=-1.5, z=1.5),
                     center=dict(x=0, y=0, z=0),
@@ -771,3 +729,15 @@ async def get_plotly_3d(req: MaskRequest):
         import traceback
         traceback.print_exc()
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+# ------------------------------
+# 함수 순서 요약 (읽기 편한 흐름)
+# 1) 설정/상수
+# 2) 파일/변환 유틸(save_file_permanent, dicom_to_nifti, win_to_wsl)
+# 3) segmentation 실행(run_hippmapp3r) 및 마스크 후처리(split_left_right, largest_cc)
+# 4) ICV 계산(calculate_icv_nilearn)
+# 5) 특성 계산(compute_features)
+# 6) 모델 관련(build_vec, infer, make_summary)
+# 7) DB 관련(save_exam, save_db)
+# 8) API 엔드포인트 (/api/process_mri 등)
+# ------------------------------

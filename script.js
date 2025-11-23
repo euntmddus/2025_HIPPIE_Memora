@@ -101,8 +101,8 @@ async function loadPatients() {
         sex: row.sex,
         age: row.age,
         vitals: vitalsStr, // [수정] 빈 문자열('') 대신 생성한 문자열 연결
-        icv: row.icv || 0,
-        apoe4: row.apoe4 || 0,
+        icv: row.icv,
+        apoe4: row.apoe4,
         features: null,
         summary: ''
       };
@@ -146,7 +146,7 @@ function renderFeatures(features) {
         ? `${features.left_hipp_vol_icv_norm} / ${features.right_hipp_vol_icv_norm} / ${features.total_hipp_vol_icv_norm}`
         : '—'
     ],
-    ['APOE4 유전자형', (features.APOE4 !== undefined ? features.APOE4 : (features.apoe4 ?? '정보 없음'))]
+    ['APOE4 유전자형', (features.APOE4 != null ? features.APOE4 : (features.apoe4 != null ? features.apoe4 : '정보 없음'))]
   ];
 
   rows.forEach(([k, v]) => {
@@ -508,21 +508,28 @@ if (fileInput) {
     const p = patients[currentPatientIndex];
 
     try {
-      const noticeMsg = "영상 분석이 시작됩니다. 약 3분 정도 소요되니 잠시만 기다려주세요...";
-      alert(noticeMsg);
-
       if (loadingText) {
         loadingText.style.display = 'block';
-        loadingText.textContent = "분석 중... (약 3분 소요)";
+        loadingText.textContent = "분석 중...";
       }
       if (btnUpload) btnUpload.disabled = true;
 
       const fd = new FormData();
       fd.append('file', f);
       fd.append('patient_id', p?.id || '');
-      fd.append('age', String(p?.age || 0));
-      fd.append('apoe4', String(p?.apoe4 || 0));
-      fd.append('sex', p?.sex || 'M');
+
+      if (p?.age != null) {
+        fd.append('age', String(p.age));
+      }
+
+      if (p?.apoe4 != null) {
+        fd.append('apoe4', String(p.apoe4));
+      }
+
+      if (p?.sex) {
+        fd.append('sex', p.sex);
+      }
+
       if (p?.icv) fd.append('icv', String(p.icv));
 
       const now = new Date();

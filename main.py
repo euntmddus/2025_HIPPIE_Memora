@@ -22,6 +22,7 @@ import json
 import plotly.graph_objects as go
 from skimage import measure
 from scipy.ndimage import binary_closing
+from scipy.ndimage import gaussian_filter
 from skimage.filters import gaussian
 from nilearn.masking import compute_brain_mask
 from nilearn.image import resample_to_img
@@ -107,7 +108,7 @@ class PatientOut(BaseModel):
     height_cm: int | None = None # 추가됨
     weight_kg: int | None = None # 추가됨
     icv: float | None = None 
-    apoe4: int | None = 0
+    apoe4: Optional[int] = Form(None)
 
 class MaskRequest(BaseModel):
     mask_base64: str
@@ -291,8 +292,15 @@ def compute_features(left_path: Path, right_path: Path, icv: float | None):
 
 # XGBoost
 def build_vec(feats):
-    return np.array([float(feats.get(c) or 0) for c in FEATURE_COLS], dtype=np.float32).reshape(1, -1)
-
+    vector = []
+    for c in FEATURE_COLS:
+        val = feats.get(c)
+        if val is None:
+            vector.append(np.nan)
+        else:
+            vector.append(float(val))
+            
+    return np.array(vector, dtype=np.float32).reshape(1, -1)
 
 def infer(feats):
     p = xgb_model.predict_proba(build_vec(feats))[0]
@@ -401,9 +409,9 @@ def get_patients():
 async def process_mri(
     file: UploadFile = File(...),
     patient_id: str = Form(...),
-    age: float = Form(...),
-    apoe4: int = Form(...),
-    sex: str = Form(...),
+    age: float | None = Form(None), 
+    apoe4: Optional[int] = Form(None),
+    sex: str | None = Form(None),
     icv: float | None = Form(None),
     exam_datetime: str | None = Form(None)
 ):
@@ -445,10 +453,14 @@ async def process_mri(
 
     # 4. Feature 계산
     feats = compute_features(left, right, final_icv)
-    feats["AGE"] = age
+    feats["AGE"] = age 
     feats["APOE4"] = apoe4
-    feats["SEX_FEMALE"] = 1.0 if sex.upper().startswith("F") else 0.0
 
+    if sex is not None:
+        feats["SEX_FEMALE"] = 1.0 if sex.upper().startswith("F") else 0.0
+    else:
+        feats["SEX_FEMALE"] = None
+        
     # 5. AI 예측
     label, probs = infer(feats)
     summary = make_summary(label, probs, feats)
@@ -598,7 +610,7 @@ def get_patient_history(patient_id: str):
 @app.post("/api/get_plotly_3d")
 async def get_plotly_3d(req: MaskRequest):
     try:
-        print(">>> [3D 최종] 홈 버튼 고정 + 카메라 90도 회전 + 라벨/축 표시")
+        print(">>> [3D 최종] 홈 버튼 고정 + 카메라 90도 회전 + 라벨/축 표시 + 고화질 렌더링")
         import base64, gzip
         decoded = base64.b64decode(req.mask_base64)
         if decoded[:2] == b'\x1f\x8b':
@@ -631,12 +643,15 @@ async def get_plotly_3d(req: MaskRequest):
         
         # 방향 표시를 위한 범위 계산용
         all_x, all_y, all_z = [], [], []
-
+        
         def create_trace(label_id, color, name, text_label):
             if np.sum(data == label_id) < 10: return None
-            m = (data == label_id).astype(np.uint8)
+            
+            m = (data == label_id).astype(float)
+            m_smooth = gaussian_filter(m, sigma=0.5) # 값이 클 수록 뭉툭해짐 (0.5~1.0)
+            
             try:
-                verts, faces, _, _ = measure.marching_cubes(m, 0.5, step_size=1)
+                verts, faces, _, _ = measure.marching_cubes(m_smooth, level=0.5, step_size=1)
                 
                 # MRI(z,y,x) -> Plotly(x,y,z) 변환
                 verts_xyz = np.vstack([verts[:, 2], verts[:, 1], verts[:, 0]]).T
@@ -649,7 +664,7 @@ async def get_plotly_3d(req: MaskRequest):
                 all_y.extend(verts_centered[:, 1])
                 all_z.extend(verts_centered[:, 2])
 
-                # 라벨 위치: 각 해마의 개별 중심점
+                # 라벨 위치
                 label_positions[text_label] = {
                     "x": np.mean(verts_centered[:, 0]),
                     "y": np.mean(verts_centered[:, 1]),
@@ -657,6 +672,7 @@ async def get_plotly_3d(req: MaskRequest):
                     "color": color
                 }
 
+                # ★★★ [핵심 수정] 3D 렌더링 퀄리티 향상 ★★★
                 return go.Mesh3d(
                     x=verts_centered[:, 0].tolist(),
                     y=verts_centered[:, 1].tolist(),
@@ -667,8 +683,21 @@ async def get_plotly_3d(req: MaskRequest):
                     color=color,
                     opacity=1.0,
                     name=name,
-                    flatshading=True, # 선명하게
-                    lighting=dict(ambient=0.7, diffuse=0.8, specular=0.2) # 밝게
+                    
+                    # 1. 부드러운 쉐이딩 적용 (각진 느낌 제거)
+                    flatshading=False, 
+                    
+                    # 2. 조명 효과 개선 (유기체 조직 느낌 강화)
+                    # [옵션 1] 가장 보편적인 의료용 3D 스타일 (Soft Matte)
+                    lighting=dict(
+                        ambient=0.5,      # 주변광을 적당히 높여 그림자가 너무 어둡지 않게 (0.4 -> 0.5)
+                        diffuse=0.8,      # 기본 색상을 선명하게 유지
+                        roughness=0.7,    # ★핵심: 표면을 매트하게 처리하여 플라스틱 느낌 제거 (0.1 -> 0.7)
+                        specular=0.1,     # ★핵심: 반사광을 확 줄여서 눈부심 방지 (0.4 -> 0.1)
+                        fresnel=0.5       # 외곽선에 은은한 빛을 주어 입체감 살림
+                    ),
+                    # 조명 위치를 정면 위쪽으로 배치하여 그림자를 자연스럽게
+                    lightposition=dict(x=1000, y=1000, z=5000)
                 )
             except Exception as e:
                 print(f"메쉬 오류 ({name}): {e}")
@@ -692,7 +721,7 @@ async def get_plotly_3d(req: MaskRequest):
         for txt, pos in label_positions.items():
             annotations.append(dict(
                 showarrow=False,
-                x=pos["x"], y=pos["y"], z=pos["z"] + 15, # 살짝 위로
+                x=pos["x"], y=pos["y"], z=pos["z"] + 15,
                 text=txt,
                 font=dict(color=pos["color"], size=24, family="Arial Black"),
                 xanchor="center", yanchor="bottom"
@@ -702,44 +731,41 @@ async def get_plotly_3d(req: MaskRequest):
         padding = 20
         if all_x:
             max_x, max_y, max_z = max(all_x), max(all_y), max(all_z)
-            # X축 (Left-Right)
+            # X축
             annotations.append(dict(showarrow=False, x=max_x + padding, y=0, z=0, text="x", font=dict(color="black", size=14)))
-            # Y축 (Anterior)
+            # Y축
             annotations.append(dict(showarrow=False, x=0, y=max_y + padding, z=0, text="y", font=dict(color="black", size=14)))
-            # Z축 (Superior)
+            # Z축
             annotations.append(dict(showarrow=False, x=0, y=0, z=max_z + padding, text="z", font=dict(color="black", size=14)))
 
         # [3] 레이아웃 & 카메라 설정 (핵심)
-            axis_style = dict(
-                        showgrid=False, zeroline=False, showbackground=False, showticklabels=False,
-                        visible=False, showline=False
-                    )
+        # ▼▼▼ [수정됨] 여기서부터 들여쓰기를 왼쪽으로 당겼습니다. ▼▼▼
+        axis_style = dict(
+            showgrid=False, zeroline=False, showbackground=False, showticklabels=False,
+            visible=False, showline=False
+        )
 
-            fig.update_layout(
-                scene=dict(
-                    xaxis=dict(**axis_style),
-                    yaxis=dict(**axis_style),
-                    zaxis=dict(**axis_style),
-                    aspectmode='data',
-                    bgcolor='white',
-                    annotations=annotations,
-                    
-                    # ★ [추가됨] 카메라 설정을 scene 안에 직접 넣어야 'Home 버튼' 기준이 됩니다.
-                    # x=1.5, y=1.5, z=1.5 (기본)  -->  y를 -1.5로 바꾸면 시계방향 90도 회전
-                    camera=dict(
-                        eye=dict(x=1.5, y=-1.5, z=1.5),
-                        center=dict(x=0, y=0, z=0),
-                        up=dict(x=0, y=0, z=1)
-                    )
-                ),
-                paper_bgcolor='white',
-                margin=dict(l=0, r=0, b=0, t=0)
-            )
+        fig.update_layout(
+            scene=dict(
+                xaxis=dict(**axis_style),
+                yaxis=dict(**axis_style),
+                zaxis=dict(**axis_style),
+                aspectmode='data',
+                bgcolor='white',
+                annotations=annotations,
+                
+                # 카메라 설정
+                camera=dict(
+                    eye=dict(x=1.5, y=-1.5, z=1.5),
+                    center=dict(x=0, y=0, z=0),
+                    up=dict(x=0, y=0, z=1)
+                )
+            ),
+            paper_bgcolor='white',
+            margin=dict(l=0, r=0, b=0, t=0)
+        )
 
-            # ★ [삭제할 부분] 기존 코드 맨 아래에 있던 이 줄은 지워주세요!
-            # fig.update_layout(scene_camera=cam)  <-- 삭제 
-
-            return JSONResponse(content=json.loads(fig.to_json()))
+        return JSONResponse(content=json.loads(fig.to_json()))
 
     except Exception as e:
         import traceback

@@ -1,0 +1,384 @@
+:root {
+  --bg: #fff;
+  --ink: #111;
+  --ink-2: #1b2330;
+  --muted: #444;
+  --line: #c2c8d0;
+  --accent: #2a3f57;
+  --ok: #167c3a;
+  --warn: #c7681e;
+  --bad: #c43d35;
+}
+
+* { box-sizing: border-box }
+html, body { height: 100% }
+
+body {
+  margin: 0;
+  font-family: 'Malgun Gothic', sans-serif;
+  font-size: 13px;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.app {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  height: 100vh;
+}
+
+.toolbar {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  padding: 4px 6px;
+  background: #e6e9ee;
+  border-bottom: 1px solid #b5bcc6;
+}
+
+.tool-btn {
+  padding: 3px 8px;
+  font-size: 12px;
+  border: 1px solid #b5bcc6;
+  background: #f9f9f9;
+  cursor: pointer;
+  border-radius: 2px;
+}
+
+.tool-btn:active { background: #eef1f4 }
+
+.tool-sep {
+  width: 1px;
+  height: 20px;
+  background: #b5bcc6;
+}
+
+.panes {
+  display: grid;
+  grid-template-columns: 280px 1fr 360px;
+  grid-template-rows: 1fr 160px;
+  gap: 6px;
+  padding: 6px;
+  background: #f4f6f8;
+}
+
+.panel {
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: #fff;
+}
+
+.panel-header {
+  padding: 6px 8px;
+  background: #f2f4f7;
+  border-bottom: 1px solid var(--line);
+  font-weight: 600;
+}
+
+.panel-body {
+  padding: 6px;
+  overflow: auto;
+}
+
+.patient-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.patient-list li {
+  padding: 4px 6px;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  border-bottom: 1px solid #eee;
+  cursor: pointer;
+}
+
+.patient-list li:hover { background: #f7f9fb }
+
+.patient-list li.active {
+  background: #eef2f6;
+  outline: 1px solid #c5ccd5;
+}
+
+.input,
+.textarea {
+  border: 1px solid var(--line);
+  padding: 6px 8px;
+  font-size: 12px;
+  border-radius: 2px;
+  height: 50px;
+  width: 100%;
+}
+
+.textarea { resize: vertical }
+
+.viewer {
+  border: 1px solid var(--line);
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  background: #fafafa;
+  overflow: hidden;
+}
+
+.three-panel {
+  width: 100%;
+  height: 100%;
+  background: #111;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: 4px;
+  border-radius: 6px;
+  overflow: hidden;
+  position: relative;
+}
+
+.three-subpanel {
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.three-subpanel canvas {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+}
+
+.nifti-controls { display: none !important; }
+
+.nifti-controls label {
+  color: #ccc;
+  font-size: 11px;
+}
+
+.nifti-controls input[type=range] { width: 100px; }
+
+.nifti-controls span {
+  color: #999;
+  font-size: 11px;
+  min-width: 25px;
+}
+
+.nifti-panel {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  background: #000;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  overflow: hidden;
+}
+
+.nifti-panel canvas {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  image-rendering: pixelated;
+}
+
+.view-label {
+  position: absolute;
+  top: 5px;
+  left: 5px;
+  background: rgba(0,0,0,0.7);
+  font-size: 10px;
+  color: #4a90e2;
+  padding: 3px 6px;
+  border-radius: 3px;
+  font-weight: 600;
+  z-index: 10;
+}
+
+.slice-info {
+  position: absolute;
+  bottom: 5px;
+  left: 5px;
+  background: rgba(0,0,0,0.7);
+  font-size: 9px;
+  color: #ccc;
+  padding: 2px 5px;
+  border-radius: 3px;
+  z-index: 10;
+}
+
+.nifti-loading {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%,-50%);
+  color: #4a90e2;
+  font-size: 13px;
+  z-index: 5;
+}
+
+.dir-label {
+  position: absolute;
+  color: #fbee36;
+  font-size: 7px;
+  font-weight: 600;
+  opacity: 0.8;
+  pointer-events: none;
+  user-select: none;
+  z-index: 5;
+}
+
+.dir-top {
+  top: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.dir-bottom {
+  bottom: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.dir-left {
+  top: 50%;
+  left: 4px;
+  transform: translateY(-50%);
+}
+
+.dir-right {
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+}
+
+#brightness { display: none; }
+
+.view-toggle-row {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.view-toggle-row .tool-btn { flex: 1; }
+
+.kv {
+  display: grid;
+  grid-template-columns: 90px 1fr;
+  gap: 4px;
+  padding: 4px 0;
+  border-bottom: 1px dashed #ddd;
+}
+
+.section-title {
+  margin: 8px 0 4px;
+  padding-bottom: 4px;
+  border-bottom: 2px solid #ddd;
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.vitals-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: max-content 1fr max-content 1fr;
+  column-gap: 12px;
+  row-gap: 4px;
+}
+
+.vitals-list li { display: contents }
+
+.vitals-list .vkey {
+  color: #6c7786;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.vitals-list .vval {
+  font-weight: 600;
+}
+
+.log-panel {
+  grid-column: 1 / -1;
+  padding: 8px 0;
+  background: #fff;
+  border-top: 1px solid #bbb;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+.log-panel .section-title {
+  text-align: left;
+  padding-left: 15px;
+  margin-bottom: 6px;
+  border-bottom: none;
+  font-weight: bold;
+  font-size: 14px;
+}
+
+.log-list {
+  border-top: 1px solid #ddd;
+  border-bottom: 1px solid #ddd;
+  background-color: #fafbfc;
+  width: 100%;
+  max-width: none;
+
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+
+  padding: 0;
+}
+
+.log-list .row {
+  display: grid;
+  grid-template-columns: 150px 1fr 80px;
+  gap: 10px;
+  padding: 8px 15px;
+  border-bottom: 1px solid #eee;
+  font-size: 12px;
+  align-items: center;
+}
+
+.log-list .row:nth-child(odd) { background: #fff; }
+.log-list .row:nth-child(even) { background: #f4f6f8; }
+
+#featureList { display: block; }
+
+#featureList li {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 0;
+}
+
+#featureList .vkey {
+  text-align: left;
+  white-space: nowrap;
+}
+
+#featureList .vval { text-align: right; }
+
+#mprContainer,
+#viewer3DContainer {
+  width: 100%;
+  max-width: 900px;
+  margin: 0 auto;
+  aspect-ratio: 1 / 1;
+  position: relative;
+}
+
+#viewer3DContainer {
+  background: #000; 
+}

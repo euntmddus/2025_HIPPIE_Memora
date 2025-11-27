@@ -4,7 +4,7 @@ NIfTI/DICOM 업로드 → 해마 세그멘테이션 → 해마 볼륨/ICV 계산
 
 ---
 
-## 조직 구성도
+## Organization Chart
 | 역할 | 이름 | 주요 담당 |
 |------|------|------------|
 | **PM** | 이시연 | 프로젝트 총괄, 전체 일정·리스크 관리 |
@@ -16,7 +16,7 @@ NIfTI/DICOM 업로드 → 해마 세그멘테이션 → 해마 볼륨/ICV 계산
 
 ---
 
-## 협업 구조
+## Team Workflow
 - **PM → PL**: 일정/리스크 공유  
 - **PL → ENG1/ENG2**: 개발 스프린트 계획 및 업무 전달  
 - **ENG1 ↔ ENG2**: AI 처리 ↔ Web 서버 연동  
@@ -25,7 +25,7 @@ NIfTI/DICOM 업로드 → 해마 세그멘테이션 → 해마 볼륨/ICV 계산
 
 ---
 
-## 기술 스택
+## Tech Stack
 - **ENG1**: Python, PyTorch/TensorFlow, WSL2, ML Pipeline  
 - **ENG2**: FastAPI, MySQL, Three.js/AMI.js, Docker  
 - **CM**: Git/GitHub, Notion  

@@ -19,7 +19,7 @@ NIfTI/DICOM 업로드 → 해마 세그멘테이션 → 해마 볼륨/ICV 계산
 - Hippocampal volume & asymmetry 자동 계산  
 - ICV(auto) 계산 및 normalization  
 - XGBoost 기반 CN vs AD 분류  
-- MRI 2D MPR 뷰어 + 3D Mesh 시각화  
+- MRI 2D MPR 뷰어 + 3D 시각화  
 - 검사 기록 및 결과 MySQL 저장  
 
 ---
@@ -32,4 +32,13 @@ NIfTI/DICOM 업로드 → 해마 세그멘테이션 → 해마 볼륨/ICV 계산
   - Age, Sex, APOE4  
 - **Model**: XGBoost  
 - **Performance**: AUC ~0.90 / Accuracy ~0.85 (ADNI baseline)  
-- **External Test**: OASIS-3 raw MRI 기반 end-to-end 평가 지원  
+- **External Test**: OASIS-3 raw MRI 기반 end-to-end 평가 지원
+
+---
+
+## References
+- HippMapp3r: https://github.com/mattcieslak/HippMapp3r
+- ADNI: http://adni.loni.usc.edu
+- OASIS-3: https://www.oasis-brains.org
+
+---

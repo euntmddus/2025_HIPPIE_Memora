@@ -1,7 +1,5 @@
 FROM python:3.7
 
-# PyTorch + CUDA 없는 CPU 버전 설치 (세그 전용)
-RUN pip install torch==1.10.0 torchvision==0.11.0
 
 # HippMapp3r 설치
 RUN pip install hippmapp3r
@@ -12,4 +10,5 @@ COPY entrypoint.sh .
 RUN chmod +x entrypoint.sh
 
 # 실행 명령: FastAPI가 docker exec로 호출할 것
+
 ENTRYPOINT ["./entrypoint.sh"]

@@ -1,0 +1,37 @@
+version: "3.9"
+
+services:
+
+  backend:
+    build: ./backend
+    container_name: backend-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+      - ./data:/data
+    depends_on:
+      - mysql
+      - hippmapp3r
+
+  hippmapp3r:
+    build: ./hippmapp3r
+    container_name: hippmapp3r
+    volumes:
+      - ./data:/data
+
+  mysql:
+    image: mysql:8.0
+    container_name: mysql-db
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: memora
+      MYSQL_USER: user
+      MYSQL_PASSWORD: pass
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+
+volumes:
+  mysql_data:
